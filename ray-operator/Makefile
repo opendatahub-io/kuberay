@@ -112,9 +112,16 @@ CONTROLLER_GEN = $(shell pwd)/bin/controller-gen
 controller-gen: ## Download controller-gen locally if necessary.
 	$(call go-get-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@v0.6.0)
 
+arch:= $(shell uname -m)
+
+ifeq ($(arch), ppc64le)
+KUSTOMIZE_VERSION ?= v5@v5.0.3
+else
+KUSTOMIZE_VERSION ?= v3@v3.8.7
+endif
 KUSTOMIZE = $(shell pwd)/bin/kustomize
 kustomize: ## Download kustomize locally if necessary.
-	$(call go-get-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v3@v3.8.7)
+        $(call go-get-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/$(KUSTOMIZE_VERSION))
 
 GOFUMPT = $(shell pwd)/bin/gofumpt
 gofumpt: ## Download gofumpt locally if necessary.
