@@ -7,7 +7,6 @@ configMapGenerator:
 - name: ray-config
   envs:
     - params.env
-
 configurations:
   - params.yaml
 
