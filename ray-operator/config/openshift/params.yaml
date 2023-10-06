@@ -1,6 +1,4 @@
 varReference:
-  - path: subjects[]/namespace
-    kind: ClusterRoleBinding
   - path: users[]
     kind: SecurityContextConstraints
   - path: spec/template/spec/containers[]/image
