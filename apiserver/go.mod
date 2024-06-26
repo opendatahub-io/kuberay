@@ -1,6 +1,6 @@
 module github.com/ray-project/kuberay/apiserver
 
-go 1.20
+go 1.22.2
 
 require (
 	github.com/go-openapi/runtime v0.19.31
@@ -71,7 +71,7 @@ require (
 	github.com/prometheus/procfs v0.10.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	go.mongodb.org/mongo-driver v1.5.1 // indirect
-	golang.org/x/exp v0.0.0-20220722155223-a9213eeb770e // indirect
+	golang.org/x/exp v0.0.0-20220827204233-334a2380cb91 // indirect
 	golang.org/x/net v0.23.0 // indirect
 	golang.org/x/oauth2 v0.11.0 // indirect
 	golang.org/x/sys v0.18.0 // indirect

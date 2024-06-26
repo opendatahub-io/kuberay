@@ -1,6 +1,6 @@
 module github.com/ray-project/kuberay/security
 
-go 1.20
+go 1.22.2
 
 require (
 	google.golang.org/grpc v1.59.0
