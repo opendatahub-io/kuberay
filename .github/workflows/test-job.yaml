@@ -3,12 +3,11 @@ name: Go-build-and-test
 on:
   push:
     branches:
-    - master
+    - dev
     - release-*
   pull_request:
     branches:
-    - master
-    - release-*
+      - '**'
 
 jobs:
   lint:
