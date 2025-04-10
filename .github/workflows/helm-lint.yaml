@@ -3,12 +3,12 @@ name: Lint and Test Charts
 on:
   push:
     branches:
-      - master
-      - release-*
+    - dev
+    - release-*
   pull_request:
     branches:
-      - master
-      - release-*
+    - dev
+    - release-*
 
 jobs:
   lint-test-helm-3-4:

@@ -37,7 +37,7 @@ runs:
     - name: Setup KinD cluster
       uses: helm/kind-action@v1.8.0
       with:
-        cluster_name: cluster
+        cluster_name: kind
         version: v0.17.0
         config: ${{ env.KIND_CONFIG_FILE }}
 

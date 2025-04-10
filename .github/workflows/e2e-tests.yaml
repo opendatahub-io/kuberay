@@ -1,0 +1,73 @@
+name: E2E Tests
+
+on:
+  pull_request:
+    branches:
+      - '**'
+  push:
+    branches:
+      - dev
+      - 'release-*'
+
+concurrency:
+  group: ${{ github.head_ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+        - name: Checkout code
+          uses: actions/checkout@v3
+          with:
+            submodules: recursive
+
+        - name: Set up Go
+          uses: actions/setup-go@v3
+          with:
+            go-version: v1.22
+
+        - name: Set up gotestfmt
+          uses: gotesttools/gotestfmt-action@v2
+          with:
+            token: ${{ secrets.GITHUB_TOKEN }}
+
+        - name: Setup and start KinD cluster
+          uses: ./.github/workflows/actions/kind
+
+        - name: Deploy Kuberay operator
+          id: deploy
+          run: |
+            echo "Deploying Kuberay operator"
+            cd ray-operator
+
+            IMG=quay.io/opendatahub/kuberay-operator:dev
+            make docker-build -e IMG="${IMG}" -e ENGINE=docker
+            kind load docker-image ${IMG}
+
+            make deploy -e IMG="${IMG}"
+            kubectl wait --timeout=90s --for=condition=Available=true deployment -n default kuberay-operator
+
+        - name: Run e2e tests
+          run: |
+            export KUBERAY_TEST_TIMEOUT_SHORT=3m
+            export KUBERAY_TEST_TIMEOUT_MEDIUM=10m
+            export KUBERAY_TEST_TIMEOUT_LONG=15m
+
+            set -euo pipefail
+            cd ray-operator
+            go test -timeout 30m -v ./test/e2e -json 2>&1 | tee ./gotest.log | gotestfmt
+
+        - name: Print KubeRay operator logs
+          if: steps.deploy.outcome == 'success'
+          run: |
+            echo "Printing KubeRay operator logs"
+            kubectl logs -n default --tail -1 -l app.kubernetes.io/name=kuberay-operator app.kubernetes.io/name=kuberay | tee ./kuberay-operator.log
+
+        - name: Upload logs
+          uses: actions/upload-artifact@v4
+          with:
+            name: logs
+            retention-days: 10
+            path: |
+              **/*.log
