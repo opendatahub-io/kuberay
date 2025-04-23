@@ -1,0 +1,6 @@
+version: "1"
+rules:
+  - base: dev
+    upstream: ray-project:master
+    mergeMethod: hardreset
+conflictLabel: "merge-conflict"
