@@ -8,7 +8,7 @@ require (
 	github.com/go-openapi/runtime v0.28.0
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.20.5
-	github.com/ray-project/kuberay/proto v0.0.0-20220703232803-3e7749d17400
+	github.com/ray-project/kuberay/proto bf8a9316f094
 	github.com/ray-project/kuberay/ray-operator v0.0.0-20220703232803-3e7749d17400
 	github.com/stretchr/testify v1.10.0
 	google.golang.org/grpc v1.65.0
