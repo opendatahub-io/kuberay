@@ -13,7 +13,7 @@ require (
 	github.com/jarcoal/httpmock v1.2.0
 	github.com/onsi/ginkgo/v2 v2.22.1
 	github.com/onsi/gomega v1.36.2
-	github.com/openshift/api v0.0.0-20240625084701-0689f006bcde
+	github.com/openshift/api b7d0ca2f7643
 	github.com/orcaman/concurrent-map/v2 v2.0.1
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.20.5
