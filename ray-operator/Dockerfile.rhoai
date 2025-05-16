@@ -1,7 +1,6 @@
 # Build the manager binary - we don't have a registry ubi9 toolset for go1.24 yet
 FROM golang:1.24.2-bullseye AS builder
 
-#FROM brew.registry.redhat.io/rh-osbs/openshift-golang-builder:1.24 AS builder
 
 WORKDIR /workspace
 # Copy the Go Modules manifests
