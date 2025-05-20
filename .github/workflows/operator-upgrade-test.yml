@@ -1,0 +1,80 @@
+name: Test KubeRay Operator Upgrade
+
+on:
+  pull_request:
+    branches:
+      - '**'
+  push:
+    branches:
+      - dev
+      - 'release-*'
+  workflow_dispatch: # to allow running on demand
+
+jobs:
+  test_kuberay_deployment_and_upgrade:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          cache: false
+          go-version: '1.24'
+
+      - name: Install go dependencies
+        run: |
+          cd ${{ github.workspace }}/ray-operator
+          go mod download
+
+      - name: Install helm
+        run: |
+          curl -Lo helm.tar.gz https://get.helm.sh/helm-v3.12.2-linux-amd64.tar.gz
+          tar -zxvf helm.tar.gz
+          mv linux-amd64/helm /usr/local/bin/helm
+          helm repo add kuberay https://ray-project.github.io/kuberay-helm/
+          helm repo update
+
+      - name: Install kind
+        run: |
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          chmod +x ./kind
+          mv ./kind /usr/local/bin/kind
+
+      - name: Create Kind Cluster
+        run: kind create cluster
+
+      - name: Set kubectl context
+        run: kubectl cluster-info --context kind-kind
+
+      - name: Install Older KubeRay Operator (v1.2.2)
+        run: |
+          helm repo add kuberay https://ray-project.github.io/kuberay-helm/
+          helm install kuberay-operator kuberay/kuberay-operator --version 1.2.2
+
+      - name: Wait for Kuberay Operator to be available
+        run: kubectl wait --timeout=90s --for=condition=Available=true deployment -n default kuberay-operator
+
+      - name: Run Upgrade Tests
+        run: |
+          cd ray-operator
+          echo "--- START:Running e2e Operator upgrade (v1.2.2 to v1.3.2 operator) tests"
+          KUBERAY_TEST_TIMEOUT_SHORT=1m KUBERAY_TEST_TIMEOUT_MEDIUM=5m KUBERAY_TEST_TIMEOUT_LONG=10m KUBERAY_TEST_UPGRADE_IMAGE=v1.3.2 \
+          go test -timeout 30m -v ./test/e2eupgrade
+          echo "--- END:e2e Operator upgrade (v1.2.2 to v1.3.2 operator) tests finished"
+
+      - name: Display all events on kind cluster
+        if: failure()
+        run: kubectl get events -A
+
+      - name: Display all pods on kind cluster
+        if: failure()
+        run: kubectl get pods -A
+
+      - name: Cleanup
+        if: always()
+        run: kind delete clusters --all || true
