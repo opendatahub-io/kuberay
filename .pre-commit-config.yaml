@@ -55,7 +55,7 @@ repos:
         always_run: true
         pass_filenames: false
         additional_dependencies:
-          - PyYAML==6.0.1
+          - PyYAML==6.0.2
       - id: validate-helm-charts
         name: validate helm charts with kubeconform
         entry: bash scripts/validate-helm.sh

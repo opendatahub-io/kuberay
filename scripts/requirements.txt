@@ -1,4 +1,4 @@
-PyYAML==6.0
+PyYAML==6.0.2
 deepdiff==5.8.1
 PyGithub==1.57
 pytest==7.0.1
