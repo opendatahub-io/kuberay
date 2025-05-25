@@ -7,7 +7,7 @@ toolchain go1.24.2
 require (
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.22.0
-	github.com/ray-project/kuberay/proto v0.0.0-20220703232803-3e7749d17400
+	github.com/ray-project/kuberay/proto 196f789ec7b2
 	github.com/ray-project/kuberay/ray-operator v0.0.0-20220703232803-3e7749d17400
 	github.com/stretchr/testify v1.10.0
 	google.golang.org/grpc v1.72.0
