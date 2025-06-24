@@ -99,7 +99,7 @@ clients/
     │       └── kuberay_cluster_utils.py
     ├── python_client_test
     │   ├── README.md
-    │   ├── test_api.py
+    │   ├── test_cluster_api.py
     │   ├── test_director.py
     │   └── test_utils.py
     └── setup.cfg
