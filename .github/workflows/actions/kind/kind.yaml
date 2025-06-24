@@ -9,7 +9,5 @@ nodes:
         nodeRegistration:
           kubeletExtraArgs:
             node-labels: "ingress-ready=true"
-containerdConfigPatches:
-  - |-
-    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."${REGISTRY_ADDRESS}"]
-      endpoint = ["http://${REGISTRY_ADDRESS}"]
+  - role: worker
+    image: kindest/node:v1.30.8@sha256:17cd608b3971338d9180b00776cb766c50d0a0b6b904ab4ff52fd3fc5c6369bf
