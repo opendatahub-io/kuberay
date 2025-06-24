@@ -6,7 +6,7 @@ import logging
 import copy
 import re
 from typing import Any, Tuple
-from python_client import constants
+from odh_kuberay_client import constants
 
 
 log = logging.getLogger(__name__)
@@ -53,9 +53,9 @@ class ClusterUtils:
         assert self.is_valid_name(name)
 
         cluster["apiVersion"] = "{group}/{version}".format(
-            group=constants.GROUP, version=constants.VERSION
+            group=constants.GROUP, version=constants.CLUSTER_VERSION
         )
-        cluster["kind"] = constants.KIND
+        cluster["kind"] = constants.CLUSTER_KIND
         cluster["metadata"] = {
             "name": name,
             "namespace": k8s_namespace,

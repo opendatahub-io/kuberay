@@ -3,13 +3,13 @@
 ## For developers
 
 1. `pip install -U pip setuptools`
-1. `cd clients/python-client && pip install -e .`
+1. `cd clients/odh-kuberay-client && pip install -e .`
 
 Uninstall with `pip uninstall python-client`.
 
 ## For testing run
 
-`python -m unittest discover 'clients/python-client/python_client_test/'`
+`python -m unittest discover 'clients/odh-kuberay-client/python_client_test/'`
 
 ### Coverage report
 

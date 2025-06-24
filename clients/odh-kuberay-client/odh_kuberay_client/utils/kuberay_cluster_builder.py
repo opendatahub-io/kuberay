@@ -7,8 +7,8 @@ import logging
 import math
 from typing import Any
 from abc import ABCMeta, abstractmethod
-from python_client.utils import kuberay_cluster_utils
-from python_client import constants
+from odh_kuberay_client.utils import kuberay_cluster_utils
+from odh_kuberay_client import constants
 
 
 log = logging.getLogger(__name__)
@@ -216,7 +216,7 @@ class Director:
             return cluster
         return None
 
-    def build_small_cluster(self, name: str, k8s_namespace: str = "default", labels: str = None) -> dict:
+    def build_small_cluster(self, name: str, k8s_namespace: str = "default", labels: dict = None) -> dict:
         """Builds a small cluster with the given name and k8s_namespace parameters with 1 workergroup,
         the workgroup has 1 replica with 2 cpu and 2G memory limits
 
