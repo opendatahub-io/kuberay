@@ -27,13 +27,13 @@ class RayjobApi:
     RayjobApi provides APIs to list, get, create, build, update, delete rayjobs.
     Methods:
     - submit_job(entrypoint: str, ...) -> str: Submit and execute a job asynchronously.
-    - stop_job(job_id: str) -> (bool, str): Request a job to exit asynchronously.
+    - TODO: stop_job(job_id: str) -> (bool, str): Request a job to exit asynchronously.
     - get_job_status(job_id: str) -> str: Get the most recent status of a job.
     - wait_until_job_finished(job_id: str) -> bool: Wait until a job is completed.
     - get_job_info(job_id: str): Get the latest status and other information associated with a job.
-    - list_jobs() -> List[JobDetails]: List all jobs along with their status and other information.
-    - get_job_logs(job_id: str) -> str: Get all logs produced by a job.
-    - tail_job_logs(job_id: str) -> Iterator[str]: Get an iterator that follows the logs of a job.
+    - TODO: list_jobs() -> List[JobDetails]: List all jobs along with their status and other information.
+    - TODO: get_job_logs(job_id: str) -> str: Get all logs produced by a job.
+    - TODO: tail_job_logs(job_id: str) -> Iterator[str]: Get an iterator that follows the logs of a job.
     - delete_job(job_id: str) -> (bool, str): Delete a job in a terminal state and all of its associated data.
     """
 

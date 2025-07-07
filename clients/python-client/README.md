@@ -1,6 +1,9 @@
 # Overview
 
-This python client library provide APIs to handle `raycluster` from your python application.
+This python client library provide APIs to handle `raycluster` and `rayjobs` from your python application.
+
+## NOTICE
+This python client is derived from the ray-project/kuberay python client and is not the upstream version of this client.
 
 ## Prerequisites
 
@@ -126,4 +129,4 @@ from the directory `path/to/kuberay/clients/python-client`
 
  `python -m unittest discover 'path/to/kuberay/clients/python-client/python_client_test/'`
 
-[quick-start]: https://github.com/ray-project/kuberay#quick-start
+[quick-start]: https://github.com/opendatahub-io/kuberay#quick-start
