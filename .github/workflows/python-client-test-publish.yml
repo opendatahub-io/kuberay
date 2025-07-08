@@ -1,0 +1,106 @@
+name: Publish Python Client to TestPyPI
+
+on:
+  pull_request:
+    branches:
+      - dev
+    paths:
+      - 'clients/python-client/**'
+      - '.github/workflows/python-client-test-publish.yml'
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'pull_request' }}
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install build twine
+    
+    - name: Generate unique version for PR
+      id: version
+      run: |
+        cd clients/python-client
+        # Use 0.0.0 base for all PR builds to clearly indicate development versions
+        DEV_VERSION="0.0.0.dev${{ github.event.pull_request.number }}"
+        echo "VERSION=$DEV_VERSION" >> $GITHUB_OUTPUT
+        # Update version in setup.cfg
+        sed -i "s/version = .*/version = $DEV_VERSION/" setup.cfg
+        echo "Generated version: $DEV_VERSION"
+    
+    - name: Build package
+      run: |
+        cd clients/python-client
+        # Clean any previous builds
+        rm -rf dist/ build/ *.egg-info
+        # Build the package
+        python -m build
+    
+    - name: Check package
+      run: |
+        cd clients/python-client
+        # List built files
+        ls -la dist/
+        # Check package with twine
+        twine check dist/*
+    
+    - name: Publish to TestPyPI
+      env:
+        TWINE_USERNAME: __token__
+        TWINE_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
+      run: |
+        cd clients/python-client
+        twine upload --repository testpypi dist/* --skip-existing --verbose
+    
+    - name: Comment on PR
+      uses: actions/github-script@v7
+      if: success()
+      with:
+        script: |
+          const version = '${{ steps.version.outputs.VERSION }}';
+          const comment = `✅ **Python client published to TestPyPI!**
+          
+          Version: \`${version}\`
+          
+          Install with:
+          \`\`\`bash
+          pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ odh-kuberay-client==${version}
+          \`\`\`
+          
+          View package: https://test.pypi.org/project/odh-kuberay-client/${version}/`;
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+    
+    - name: Comment on PR (failure)
+      uses: actions/github-script@v7
+      if: failure()
+      with:
+        script: |
+          const comment = `❌ **Failed to publish Python client to TestPyPI**
+          
+          Please check the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
+          
+          Common issues:
+          - Missing or invalid TEST_PYPI_API_TOKEN secret
+          - Version already exists on TestPyPI
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          }); 
