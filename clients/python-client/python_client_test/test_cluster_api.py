@@ -1,9 +1,5 @@
 import unittest
-import copy
-import re
-from python_client.utils import kuberay_cluster_utils, kuberay_cluster_builder
 from python_client import kuberay_cluster_api
-
 
 
 test_cluster_body: dict = {
@@ -91,6 +87,7 @@ test_cluster_body: dict = {
         ],
     },
     "status": {
+        "state": "ready",
         "availableWorkerReplicas": 2,
         "desiredWorkerReplicas": 1,
         "endpoints": {

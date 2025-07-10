@@ -2,12 +2,11 @@
 Set of APIs to manage rayjobs.
 """
 
-import copy
 import logging
 import time
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 from python_client import constants
 
 
