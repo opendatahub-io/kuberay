@@ -198,7 +198,7 @@ pip install dist/odh_kuberay_client-*.whl
 
 To test your package before releasing to PyPI:
 
-#### Prerequisites
+#### Local Dev Prerequisites
 
 1. **Create a TestPyPI account** at <https://test.pypi.org/account/register/>
 2. **Generate an API token**:
