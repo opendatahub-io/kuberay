@@ -140,7 +140,7 @@ class RayjobApi:
                     log.info("rayjob {} has not started yet".format(name))
                 elif current_status == "RUNNING":
                     log.info("rayjob {} is running".format(name))
-                elif current_status in ["SUCCEEDED", "STOPPED", "FAILED"]:
+                elif current_status in TERMINAL_JOB_STATUSES:
                     log.info(
                         "rayjob {} has finished with status {}!".format(
                             name, current_status
@@ -180,14 +180,8 @@ class RayjobApi:
             return resource
         except ApiException as e:
             if e.status == 404:
-                log.error(
-                    "rayjob custom resource already deleted. error = {}".format(
-                        e.reason
-                    )
-                )
+                log.error(f"rayjob custom resource already deleted. error = {e.reason}")
                 return False
             else:
-                log.error(
-                    "error deleting the rayjob custom resource: {}".format(e.reason)
-                )
+                log.error(f"error deleting the rayjob custom resource: {e.reason}")
                 return False

@@ -342,30 +342,33 @@ jobs:
         working-directory: ${{env.working-directory}}
 
   python-client-test:
-    runs-on: ubuntu-22.04
-    name: Python Client Test
+    runs-on: ubuntu-latest
     steps:
-      - name: Set up Docker
-        uses: docker/setup-docker-action@v4
-
-      - name: Install Kind
-        run: |
-          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.22.0/kind-linux-amd64
-          chmod +x ./kind
-          sudo mv ./kind /usr/local/bin/kind
-          kind create cluster
-        shell: bash
-
-      - name: Checkout Python
-        uses: actions/checkout@v2
-
-      - name: Setup Python
-        uses: actions/setup-python@v2
+      - name: Checkout code
+        uses: actions/checkout@v3
         with:
-          python-version: '3.x'
+          submodules: recursive
 
-      - name: Install package and run unittest for Python client
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup and start KinD cluster
+        uses: ./.github/workflows/actions/kind
+
+      - name: Deploy Kuberay operator
+        run: |
+          echo "Deploying Kuberay operator"
+          cd ray-operator
+          IMG=quay.io/opendatahub/kuberay-operator:v1.4.0
+          make docker-build -e IMG="${IMG}" -e ENGINE=docker
+          kind load docker-image ${IMG}
+          make deploy -e IMG="${IMG}"
+          kubectl wait --timeout=90s --for=condition=Available=true deployment -n default kuberay-operator
+
+      - name: Install Python client and run tests
         working-directory: ./clients/python-client
         run: |
           pip install -e .
-          python3 -m unittest discover 'python_client_test/'
+          python3 -m unittest discover 'python_client_test/' -v

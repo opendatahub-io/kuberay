@@ -41,7 +41,7 @@ jobs:
             echo "Deploying Kuberay operator"
             cd ray-operator
 
-            IMG=quay.io/opendatahub/kuberay-operator:dev
+            IMG=quay.io/opendatahub/kuberay-operator:v1.4.0
             make docker-build -e IMG="${IMG}" -e ENGINE=docker
             kind load docker-image ${IMG}
 

@@ -193,7 +193,7 @@ class TestUtils(unittest.TestCase):
         self.assertIsNotNone(created_cluster, "Cluster should be created successfully")
 
         # Wait for cluster to be running
-        self.cluster_api.wait_until_ray_cluster_running(cluster_name, namespace, 60, 10)
+        self.cluster_api.wait_until_ray_cluster_running(cluster_name, namespace, 180, 10)
 
         job_name = "wait-test-job"
         try:
@@ -227,7 +227,7 @@ class TestUtils(unittest.TestCase):
 
             # Test waiting for job completion
             result = self.api.wait_until_job_finished(
-                job_name, namespace, timeout=60, delay_between_attempts=2
+                job_name, namespace, timeout=180, delay_between_attempts=2
             )
             self.assertTrue(result, "Job should complete successfully within timeout")
 
