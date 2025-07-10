@@ -61,46 +61,106 @@ jobs:
         cd clients/python-client
         twine upload --repository testpypi dist/* --skip-existing --verbose
 
-    - name: Comment on PR
+    - name: Update PR Description
       uses: actions/github-script@v7
       if: success()
       with:
         script: |
           const version = '${{ steps.version.outputs.VERSION }}';
-          const comment = `✅ **Python client published to TestPyPI!**
 
-          Version: \`${version}\`
-
-          Install with:
-          \`\`\`bash
-          pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ odh-kuberay-client==${version}
-          \`\`\`
-
-          View package: https://test.pypi.org/project/odh-kuberay-client/${version}/`;
-
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
+          // Get current PR
+          const { data: pullRequest } = await github.rest.pulls.get({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            body: comment
+            pull_number: context.issue.number
           });
 
-    - name: Comment on PR (failure)
+          const currentBody = pullRequest.body || '';
+
+          // Section to add/update
+          const testPyPISection = [
+            '## 📦 TestPyPI Package',
+            '',
+            '✅ **Python client published to TestPyPI!**',
+            '',
+            `Version: \`${version}\``,
+            '',
+            'Install with:',
+            '```bash',
+            `pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ odh-kuberay-client==${version}`,
+            '```',
+            '',
+            `View package: https://test.pypi.org/project/odh-kuberay-client/${version}/`,
+            '',
+            '---'
+          ].join('\n');
+
+          // Check if we already have a TestPyPI section
+          const testPyPIRegex = /## 📦 TestPyPI Package[\s\S]*?(?=##|---\n|$)/;
+          let newBody;
+
+          if (testPyPIRegex.test(currentBody)) {
+            // Replace existing section
+            newBody = currentBody.replace(testPyPIRegex, testPyPISection + '\n\n');
+          } else {
+            // Append new section
+            newBody = currentBody + '\n\n' + testPyPISection;
+          }
+
+          // Update PR description
+          await github.rest.pulls.update({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            pull_number: context.issue.number,
+            body: newBody
+          });
+
+    - name: Update PR Description (failure)
       uses: actions/github-script@v7
       if: failure()
       with:
         script: |
-          const comment = `❌ **Failed to publish Python client to TestPyPI**
-
-          Please check the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
-
-          Common issues:
-          - Missing or invalid TEST_PYPI_API_TOKEN secret
-          - Version already exists on TestPyPI
-
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
+          // Get current PR
+          const { data: pullRequest } = await github.rest.pulls.get({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            body: comment
+            pull_number: context.issue.number
+          });
+
+          const currentBody = pullRequest.body || '';
+
+          // Section to add/update
+          const testPyPISection = [
+            '## 📦 TestPyPI Package',
+            '',
+            '❌ **Failed to publish Python client to TestPyPI**',
+            '',
+            `Please check the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.`,
+            '',
+            'Common issues:',
+            '- Missing or invalid TEST_PYPI_API_TOKEN secret',
+            '- Version already exists on TestPyPI',
+            '- Package metadata issues',
+            '',
+            '---'
+          ].join('\n');
+
+          // Check if we already have a TestPyPI section
+          const testPyPIRegex = /## 📦 TestPyPI Package[\s\S]*?(?=##|---\n|$)/;
+          let newBody;
+
+          if (testPyPIRegex.test(currentBody)) {
+            // Replace existing section
+            newBody = currentBody.replace(testPyPIRegex, testPyPISection + '\n\n');
+          } else {
+            // Append new section
+            newBody = currentBody + '\n\n' + testPyPISection;
+          }
+
+          // Update PR description
+          await github.rest.pulls.update({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            pull_number: context.issue.number,
+            body: newBody
           });
