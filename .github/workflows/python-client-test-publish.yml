@@ -25,16 +25,18 @@ jobs:
         python -m pip install --upgrade pip
         pip install poetry twine
 
-    - name: Set unique version and build
+    - name: Generate unique version for PR
       working-directory: clients/odh-kuberay-client
+      id: version
       run: |
-        DEV_VERSION="0.0.0.dev${{ github.event.pull_request.number }}"
+        DEV_VERSION="0.0.0.dev${{ github.run_number }}"
+        echo "VERSION=$DEV_VERSION" >> $GITHUB_OUTPUT
         poetry version $DEV_VERSION
-        poetry build
 
-    - name: Check package
+    - name: Build and Check package
       working-directory: clients/odh-kuberay-client
       run: |
+        poetry build
         twine check dist/*
 
     - name: Publish to TestPyPI
@@ -45,90 +47,31 @@ jobs:
       run: |
         twine upload --repository testpypi dist/* --verbose
 
-
     - name: Update PR Description
       uses: actions/github-script@v7
-      if: success()
+      if: always()
       with:
         script: |
-          const version = '${{ steps.version.outputs.VERSION }}';
+          const version = '${{ steps.version.outputs.VERSION }}' || `0.0.0.dev${{ github.event.pull_request.number }}`;
+          const runId = '${{ github.run_id }}';
+          const serverUrl = '${{ github.server_url }}';
+          const repo = '${{ github.repository }}';
+          const success = '${{ job.status }}' === 'success';
+
+          const section = success
+            ? `## 📦 TestPyPI Package\n\n✅ **Python client published to TestPyPI!**\n\nVersion: \`${version}\`\n\nInstall with:\n\n\`\`\`bash\npip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ odh-kuberay-client==${version}\`\`\`\n\n`
+            : `## 📦 TestPyPI Package\n\n❌ **Failed to publish Python client to TestPyPI**\n\nSee [workflow logs](${serverUrl}/${repo}/actions/runs/${runId}) for details.\n\n---\n`;
 
           const { data: pullRequest } = await github.rest.pulls.get({
             owner: context.repo.owner,
             repo: context.repo.repo,
             pull_number: context.issue.number
           });
-
-          const currentBody = pullRequest.body || '';
-
-          const testPyPISection = [
-            '## 📦 TestPyPI Package',
-            '',
-            '✅ **Python client published to TestPyPI!**',
-            '',
-            `Version: \`${version}\``,
-            '',
-            'Install with:',
-            '```bash',
-            `pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ odh-kuberay-client==${version}`,
-            '```',
-            '',
-            `View package: https://test.pypi.org/project/odh-kuberay-client/${version}/`,
-            '',
-          ].join('\n');
-
-          const testPyPIRegex = /## 📦 TestPyPI Package[\s\S]*?(?=##|---\n|$)/;
-          let newBody;
-
-          if (testPyPIRegex.test(currentBody)) {
-            newBody = currentBody.replace(testPyPIRegex, testPyPISection + '\n\n');
-          } else {
-            newBody = currentBody + '\n\n' + testPyPISection;
-          }
-
-          await github.rest.pulls.update({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            pull_number: context.issue.number,
-            body: newBody
-          });
-
-    - name: Update PR Description (failure)
-      uses: actions/github-script@v7
-      if: failure()
-      with:
-        script: |
-          const { data: pullRequest } = await github.rest.pulls.get({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            pull_number: context.issue.number
-          });
-
-          const currentBody = pullRequest.body || '';
-
-          const testPyPISection = [
-            '## 📦 TestPyPI Package',
-            '',
-            '❌ **Failed to publish Python client to TestPyPI**',
-            '',
-            `Please check the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.`,
-            '',
-            'Common issues:',
-            '- Missing or invalid TEST_PYPI_API_TOKEN secret',
-            '- Version already exists on TestPyPI',
-            '- Package metadata issues',
-            '',
-          ].join('\n');
-
-          const testPyPIRegex = /## 📦 TestPyPI Package[\s\S]*?(?=##|---\n|$)/;
-          let newBody;
-
-          if (testPyPIRegex.test(currentBody)) {
-            newBody = currentBody.replace(testPyPIRegex, testPyPISection + '\n\n');
-          } else {
-            newBody = currentBody + '\n\n' + testPyPISection;
-          }
-
+          const body = pullRequest.body || '';
+          const regex = /## 📦 TestPyPI Package[\s\S]*?---\n*/g;
+          const newBody = regex.test(body)
+            ? body.replace(regex, section + '\n\n')
+            : body + '\n\n' + section;
           await github.rest.pulls.update({
             owner: context.repo.owner,
             repo: context.repo.repo,

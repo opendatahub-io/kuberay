@@ -5,7 +5,7 @@
 1. `pip install -U pip setuptools`
 1. `cd clients/odh-kuberay-client && pip install -e .`
 
-Uninstall with `pip uninstall python-client`.
+Uninstall with `pip uninstall odh-kuberay-client`.
 
 ## For testing run
 

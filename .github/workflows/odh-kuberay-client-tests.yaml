@@ -4,18 +4,10 @@ on:
   pull_request:
     branches:
       - '**'
-    paths:
-      - 'clients/**'
-      - '.github/workflows/odh-kuberay-client-tests.yaml'
-      - '.github/workflows/actions/**'
   push:
     branches:
       - dev
       - 'release-*'
-    paths:
-      - 'clients/**'
-      - '.github/workflows/odh-kuberay-client-tests.yaml'
-      - '.github/workflows/actions/**'
 
 concurrency:
   group: ${{ github.head_ref }}-${{ github.workflow }}

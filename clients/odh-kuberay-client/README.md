@@ -232,7 +232,7 @@ twine upload --repository testpypi dist/*
 
 ```text
 clients/
-└── python-client
+└── odh-kuberay-client
     ├── LICENSE
     ├── README.md
     ├── examples
@@ -275,7 +275,7 @@ from the directory `path/to/kuberay/clients/odh-kuberay-client`
 
 ### to uninstall the module run
 
-`pip uninstall python-client`
+`pip uninstall odh-kuberay-client`
 
 ### For testing run
 

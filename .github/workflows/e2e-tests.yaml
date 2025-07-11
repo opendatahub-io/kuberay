@@ -5,21 +5,9 @@ on:
     branches:
       - dev
       - 'release-*'
-    paths:
-      - '**'
-      - '!clients/**'
-      - '!.github/**'
-      - '.github/workflows/e2e-tests.yaml'
-      - '.github/workflows/actions/**'
   pull_request:
     branches:
       - '**'
-    paths:
-      - '**'
-      - '!clients/**'
-      - '!.github/**'
-      - '.github/workflows/e2e-tests.yaml'
-      - '.github/workflows/actions/**'
 
 concurrency:
   group: ${{ github.head_ref }}-${{ github.workflow }}
