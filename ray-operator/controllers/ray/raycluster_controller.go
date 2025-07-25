@@ -310,6 +310,7 @@ func (r *RayClusterReconciler) rayClusterReconcile(ctx context.Context, instance
 		r.reconcileHeadlessService,
 		r.reconcileServeService,
 		r.reconcilePods,
+		r.reconcileNetworkPolicies,
 	}
 
 	for _, fn := range reconcileFuncs {
@@ -608,6 +609,72 @@ func (r *RayClusterReconciler) reconcileHeadlessService(ctx context.Context, ins
 	}
 
 	return nil
+}
+
+func (r *RayClusterReconciler) reconcileNetworkPolicies(ctx context.Context, instance *rayv1.RayCluster) error {
+	logger := ctrl.LoggerFrom(ctx)
+	logger.Info("Reconciling Network Policies")
+
+	networkPolicy := createDefaultDenyPolicy(instance)
+
+	if err := ctrl.SetControllerReference(instance, networkPolicy, r.Scheme); err != nil {
+		return err
+	}
+
+	if err := r.Create(ctx, networkPolicy); err != nil {
+		if errors.IsAlreadyExists(err) {
+			logger.Info("NetworkPolicy already exists, no need to create")
+			return nil
+		}
+		r.Recorder.Eventf(instance, corev1.EventTypeWarning, string(utils.FailedToCreateNetworkPolicy), "Failed to apply Head NetworkPolicy %s/%s, %v", networkPolicy.Namespace, networkPolicy.Name, err)
+		return err
+	}
+
+	return nil
+}
+
+func createDefaultDenyPolicy(instance *rayv1.RayCluster) *networkingv1.NetworkPolicy {
+	return &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-default-deny", instance.Name),
+			Namespace: instance.Namespace,
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					utils.RayClusterLabelKey: instance.Name,
+				},
+			},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+			Ingress: []networkingv1.NetworkPolicyIngressRule{
+				// Allow traffic from within the same cluster
+				{
+					From: []networkingv1.NetworkPolicyPeer{
+						{
+							PodSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									utils.RayClusterLabelKey: instance.Name,
+								},
+							},
+						},
+						// Allow KubeRay operator communication
+						{
+							PodSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									utils.KubernetesApplicationNameLabelKey: utils.ApplicationName,
+								},
+							},
+							NamespaceSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"kubernetes.io/metadata.name": "ray-system", // KubeRay operator namespace - TODO make dynamic
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
 }
 
 func (r *RayClusterReconciler) reconcilePods(ctx context.Context, instance *rayv1.RayCluster) error {
