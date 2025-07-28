@@ -500,3 +500,92 @@ func TestRayClusterAutoscalerPlacementGroup(t *testing.T) {
 		}
 	}
 }
+
+func TestRayClusterAutoscalerGCSFT(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			test := With(t)
+			g := gomega.NewWithT(t)
+
+			// Create a namespace
+			namespace := test.NewTestNamespace()
+
+			// Scripts for creating and terminating detached actors to trigger autoscaling
+			scriptsAC := newConfigMap(namespace.Name, files(test, "create_detached_actor.py", "terminate_detached_actor.py"))
+			scripts, err := test.Client().Core().CoreV1().ConfigMaps(namespace.Name).Apply(test.Ctx(), scriptsAC, TestApplyOptions)
+			g.Expect(err).NotTo(gomega.HaveOccurred())
+			LogWithTimestamp(test.T(), "Created ConfigMap %s/%s successfully", scripts.Namespace, scripts.Name)
+
+			checkRedisDBSize := DeployRedis(test, namespace.Name, RedisPassword)
+			defer g.Eventually(checkRedisDBSize, time.Second*60, time.Second).Should(gomega.BeEquivalentTo("0"))
+
+			rayClusterSpecAC := rayv1ac.RayClusterSpec().
+				WithEnableInTreeAutoscaling(true).
+				WithGcsFaultToleranceOptions(
+					rayv1ac.GcsFaultToleranceOptions().
+						WithRedisAddress(RedisAddress).
+						WithRedisPassword(rayv1ac.RedisCredential().WithValue(RedisPassword)),
+				).
+				WithRayVersion(GetRayVersion()).
+				WithHeadGroupSpec(rayv1ac.HeadGroupSpec().
+					WithRayStartParams(map[string]string{
+						"num-cpus": "0",
+					}).
+					WithTemplate(tc.HeadPodTemplateGetter()),
+				).
+				WithWorkerGroupSpecs(rayv1ac.WorkerGroupSpec().
+					WithRayStartParams(map[string]string{
+						"num-cpus": "1",
+					}).
+					WithGroupName("small-group").
+					WithReplicas(0).
+					WithMinReplicas(0).
+					WithMaxReplicas(2).
+					WithTemplate(tc.WorkerPodTemplateGetter()),
+				)
+			rayClusterAC := rayv1ac.RayCluster("ray-cluster", namespace.Name).
+				WithSpec(apply(rayClusterSpecAC, mountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](scripts, "/home/ray/test_scripts")))
+
+			rayCluster, err := test.Client().Ray().RayV1().RayClusters(namespace.Name).Apply(test.Ctx(), rayClusterAC, TestApplyOptions)
+			g.Expect(err).NotTo(gomega.HaveOccurred())
+			LogWithTimestamp(test.T(), "Created RayCluster %s/%s successfully", rayCluster.Namespace, rayCluster.Name)
+
+			// Wait for RayCluster to become ready and verify the number of available worker replicas.
+			g.Eventually(RayCluster(test, rayCluster.Namespace, rayCluster.Name), TestTimeoutMedium).
+				Should(gomega.WithTransform(RayClusterState, gomega.Equal(rayv1.Ready)))
+			g.Expect(GetRayCluster(test, rayCluster.Namespace, rayCluster.Name)).To(gomega.WithTransform(RayClusterDesiredWorkerReplicas, gomega.Equal(int32(0))))
+
+			headPod, err := GetHeadPod(test, rayCluster)
+			g.Expect(err).NotTo(gomega.HaveOccurred())
+			LogWithTimestamp(test.T(), "Found head pod %s/%s", headPod.Namespace, headPod.Name)
+
+			// Create a detached actor, and a worker should be created.
+			ExecPodCmd(test, headPod, common.RayHeadContainer, []string{"python", "/home/ray/test_scripts/create_detached_actor.py", "actor1"})
+			g.Eventually(RayCluster(test, rayCluster.Namespace, rayCluster.Name), TestTimeoutMedium).
+				Should(gomega.WithTransform(RayClusterDesiredWorkerReplicas, gomega.Equal(int32(1))))
+
+			// Terminate a detached actor, and a worker should be deleted.
+			ExecPodCmd(test, headPod, common.RayHeadContainer, []string{"python", "/home/ray/test_scripts/terminate_detached_actor.py", "actor1"})
+			g.Eventually(RayCluster(test, rayCluster.Namespace, rayCluster.Name), TestTimeoutMedium).
+				Should(gomega.WithTransform(RayClusterDesiredWorkerReplicas, gomega.Equal(int32(0))))
+
+			// Delete the head Pod and wait for the new head pod to be ready.
+			newHeadPod, err := DeletePodAndWait(test, rayCluster, namespace, headPod)
+			g.Expect(err).NotTo(gomega.HaveOccurred())
+			headPod = newHeadPod
+
+			// Create a detached actor, and a worker should be created after the new head pod is ready.
+			ExecPodCmd(test, headPod, common.RayHeadContainer, []string{"python", "/home/ray/test_scripts/create_detached_actor.py", "actor1"})
+			g.Eventually(RayCluster(test, rayCluster.Namespace, rayCluster.Name), TestTimeoutMedium).
+				Should(gomega.WithTransform(RayClusterDesiredWorkerReplicas, gomega.Equal(int32(1))))
+
+			// Terminate a detached actor, and a worker should be deleted.
+			ExecPodCmd(test, headPod, common.RayHeadContainer, []string{"python", "/home/ray/test_scripts/terminate_detached_actor.py", "actor1"})
+			g.Eventually(RayCluster(test, rayCluster.Namespace, rayCluster.Name), TestTimeoutMedium).
+				Should(gomega.WithTransform(RayClusterDesiredWorkerReplicas, gomega.Equal(int32(0))))
+
+			err = test.Client().Ray().RayV1().RayClusters(namespace.Name).Delete(test.Ctx(), rayCluster.Name, metav1.DeleteOptions{})
+			g.Expect(err).NotTo(gomega.HaveOccurred())
+		})
+	}
+}
