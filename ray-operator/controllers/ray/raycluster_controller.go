@@ -12,24 +12,23 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	routev1 "github.com/openshift/api/route/v1"
-	batchv1 "k8s.io/api/batch/v1"
-	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -41,6 +40,16 @@ import (
 	"github.com/ray-project/kuberay/ray-operator/controllers/ray/metrics"
 	"github.com/ray-project/kuberay/ray-operator/controllers/ray/utils"
 	"github.com/ray-project/kuberay/ray-operator/pkg/features"
+
+	routev1 "github.com/openshift/api/route/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+
+	istiosecurityapiv1 "istio.io/api/security/v1"
+	istiosecurityv1beta1 "istio.io/client-go/pkg/apis/security/v1beta1"
+	controllerruntime "sigs.k8s.io/controller-runtime"
 )
 
 type reconcileFunc func(context.Context, *rayv1.RayCluster) error
@@ -71,6 +80,18 @@ func NewReconciler(ctx context.Context, mgr manager.Manager, options RayClusterR
 
 	// add schema to runtime
 	schedulerMgr.AddToScheme(mgr.GetScheme())
+
+	// Register Istio types with the scheme
+	if err := istiosecurityv1beta1.AddToScheme(mgr.GetScheme()); err != nil {
+		panic(err)
+	}
+
+	// Create discovery client
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(mgr.GetConfig())
+	if err != nil {
+		panic(err)
+	}
+
 	return &RayClusterReconciler{
 		Client:                     mgr.GetClient(),
 		Scheme:                     mgr.GetScheme(),
@@ -78,6 +99,7 @@ func NewReconciler(ctx context.Context, mgr manager.Manager, options RayClusterR
 		BatchSchedulerMgr:          schedulerMgr,
 		rayClusterScaleExpectation: expectations.NewRayClusterScaleExpectation(mgr.GetClient()),
 		options:                    options,
+		DiscoveryClient:            discoveryClient,
 	}
 }
 
@@ -89,6 +111,7 @@ type RayClusterReconciler struct {
 	BatchSchedulerMgr          *batchscheduler.SchedulerManager
 	rayClusterScaleExpectation expectations.RayClusterScaleExpectation
 	options                    RayClusterReconcilerOptions
+	DiscoveryClient            discovery.DiscoveryInterface
 }
 
 type RayClusterReconcilerOptions struct {
@@ -183,6 +206,11 @@ func (r *RayClusterReconciler) rayClusterReconcile(ctx context.Context, instance
 		r.Recorder.Eventf(instance, corev1.EventTypeWarning, string(utils.InvalidRayClusterSpec),
 			"The RayCluster spec is invalid %s/%s: %v", instance.Namespace, instance.Name, err)
 		return ctrl.Result{}, nil
+	}
+
+	// Check if this is the last RayCluster being deleted and clean up Istio resources if needed
+	if err := r.checkAndCleanupMTLSResources(ctx, instance); err != nil {
+		logger.Error(err, "Failed to check and cleanup Istio resources", "namespace", instance.Namespace, "name", instance.Name)
 	}
 
 	if err := utils.ValidateRayClusterStatus(instance); err != nil {
@@ -310,6 +338,7 @@ func (r *RayClusterReconciler) rayClusterReconcile(ctx context.Context, instance
 		r.reconcileHeadlessService,
 		r.reconcileServeService,
 		r.reconcilePods,
+		r.reconcileMTLS,
 	}
 
 	for _, fn := range reconcileFuncs {
@@ -549,6 +578,244 @@ func (r *RayClusterReconciler) reconcileHeadlessService(ctx context.Context, ins
 		if err := r.createService(ctx, headlessSvc, instance); err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+func (r *RayClusterReconciler) reconcileMTLS(ctx context.Context, instance *rayv1.RayCluster) error {
+	logger := ctrl.LoggerFrom(ctx)
+
+	/*
+		to test this change set the following environment variables:
+		MTLS_ENABLED=true
+		ENABLE_INIT_CONTAINER_INJECTION=false
+	*/
+
+	// Check if mTLS is enabled via environment variable
+	if os.Getenv("MTLS_ENABLED") != "true" {
+		logger.Info("mTLS is disabled via MTLS_ENABLED environment variable, skipping configuration")
+		return nil
+	}
+	logger.Info("mTLS is enabled via MTLS_ENABLED environment variable, running configuration")
+
+	// Check if Istio is installed
+	istioInstalled, err := IsIstioInstalled(r.DiscoveryClient)
+	if err != nil {
+		logger.Error(err, "Failed to check if Istio is installed", "namespace", instance.Namespace, "name", instance.Name)
+		return err
+	}
+
+	if !istioInstalled {
+		logger.Info("Istio is not installed, skipping mTLS configuration", "namespace", instance.Namespace, "name", instance.Name)
+		return nil
+	}
+
+	// # Enable the Istio sidecar auto injection.
+	// Add label to the namespace of the Ray cluster
+	if err := r.applyMTLSLabelRayClusterNamespace(ctx, instance); err != nil {
+		logger.Error(err, "Failed to label namespace for RayCluster", "namespace", instance.Namespace, "name", instance.Name)
+		return err
+	}
+
+	// Apply mTLS STRICT mode on Istio
+	if err := r.createPeerAuthentication(ctx, instance); err != nil {
+		logger.Error(err, "Failed to create PeerAuthentication for RayCluster", "namespace", instance.Namespace, "name", instance.Name)
+		return err
+	}
+
+	// Create headless service for Istio L7 observability
+	// Need to check that the ray cluster has a max-worker-port - how can this be decided/enforced to avoid OOM issues in the sidecar.
+	// If the user doesn't define any, how can we enforce that at a platform level?
+	// Do we need observability? can this be implemented separately?
+	if err := r.createIstioHeadlessService(ctx, instance); err != nil {
+		logger.Error(err, "Failed to create headless service for Istio", "namespace", instance.Namespace, "name", instance.Name)
+		return err
+	}
+
+	return nil
+}
+
+// createPeerAuthentication creates a PeerAuthentication CR for mTLS STRICT mode
+func (r *RayClusterReconciler) createPeerAuthentication(ctx context.Context, instance *rayv1.RayCluster) error {
+	logger := ctrl.LoggerFrom(ctx)
+	// Note: We don't set owner reference to avoid automatic deletion
+	// The PeerAuthentication should persist as long as there are RayClusters in the namespace
+	// TODO fix this up. there are some issues with kind/apiversion they are hardcoded for now.
+	// this implementation is to show it working
+	peerAuth := &istiosecurityv1beta1.PeerAuthentication{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "PeerAuthentication",
+			APIVersion: "security.istio.io/v1beta1",
+		},
+		ObjectMeta: controllerruntime.ObjectMeta{
+			Name:      "default",
+			Namespace: instance.Namespace,
+		},
+		Spec: istiosecurityapiv1.PeerAuthentication{
+			Mtls: &istiosecurityapiv1.PeerAuthentication_MutualTLS{
+				Mode: istiosecurityapiv1.PeerAuthentication_MutualTLS_STRICT,
+			},
+		},
+	}
+
+	// Create the PeerAuthentication
+	// TODO Using controllerutil.CreateOrUpdate instead of Create would be a bit cleaner in terms of the depth of the logic but it's inconsistent with the rest of the codebase.
+	// so using r.Create and r.Update instead.
+	err := r.Create(ctx, peerAuth)
+	if err != nil {
+		if errors.IsAlreadyExists(err) {
+			// If it already exists, try to update it
+			existingPeerAuth := &istiosecurityv1beta1.PeerAuthentication{}
+			if err := r.Get(ctx, types.NamespacedName{
+				Name:      "default",
+				Namespace: instance.Namespace,
+			}, existingPeerAuth); err != nil {
+				return fmt.Errorf("failed to get existing PeerAuthentication: %w", err)
+			}
+
+			// Update the spec using protobuf merge
+			existingPeerAuth.Spec.Mtls = peerAuth.Spec.Mtls
+
+			if err := r.Update(ctx, existingPeerAuth); err != nil {
+				return fmt.Errorf("failed to update existing PeerAuthentication: %w", err)
+			}
+
+			logger.Info("Updated existing PeerAuthentication for mTLS STRICT mode",
+				"namespace", instance.Namespace,
+				"cluster", instance.Name)
+		} else {
+			return fmt.Errorf("failed to create PeerAuthentication: %w", err)
+		}
+	} else {
+		logger.Info("Created PeerAuthentication for mTLS STRICT mode",
+			"namespace", instance.Namespace,
+			"cluster", instance.Name)
+	}
+
+	return nil
+}
+
+// applyMTLSLabelRayClusterNamespace adds a label to the namespace of the Ray cluster
+func (r *RayClusterReconciler) applyMTLSLabelRayClusterNamespace(ctx context.Context, instance *rayv1.RayCluster) error {
+	logger := ctrl.LoggerFrom(ctx)
+
+	// Get the namespace
+	namespace := &corev1.Namespace{}
+	if err := r.Get(ctx, types.NamespacedName{Name: instance.Namespace}, namespace); err != nil {
+		return fmt.Errorf("failed to get namespace %s: %w", instance.Namespace, err)
+	}
+	labelKey := "istio-injection"
+	labelValue := "enabled"
+
+	if namespace.Labels == nil {
+		namespace.Labels = make(map[string]string)
+	}
+
+	// Only update if the label doesn't exist or has a different value
+	if currentValue, exists := namespace.Labels[labelKey]; !exists || currentValue != labelValue {
+		namespace.Labels[labelKey] = labelValue
+
+		// Update the namespace
+		if err := r.Update(ctx, namespace); err != nil {
+			return fmt.Errorf("failed to update namespace %s with label: %w", instance.Namespace, err)
+		}
+
+		logger.Info("Successfully labeled namespace for RayCluster",
+			"namespace", instance.Namespace,
+			"cluster", instance.Name,
+			"label", fmt.Sprintf("%s=%s", labelKey, labelValue))
+	}
+
+	return nil
+}
+
+// createIstioHeadlessService creates a headless service for Istio L7 observability
+func (r *RayClusterReconciler) createIstioHeadlessService(ctx context.Context, instance *rayv1.RayCluster) error {
+	logger := ctrl.LoggerFrom(ctx)
+
+	// Get the max worker port from the RayCluster spec
+	maxWorkerPort := int32(10012) // Default value TODO may need to be updated
+	if instance.Spec.HeadGroupSpec.RayStartParams != nil {
+		if maxPortStr, exists := instance.Spec.HeadGroupSpec.RayStartParams["max-worker-port"]; exists {
+			if maxPort, err := strconv.ParseInt(maxPortStr, 10, 32); err == nil {
+				maxWorkerPort = int32(maxPort)
+			}
+		}
+	}
+
+	// Create the headless service with all required ports
+	headlessSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-headless-svc", instance.Name),
+			Namespace: instance.Namespace,
+			Labels: map[string]string{
+				"ray.io/headless-worker-svc": instance.Name,
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP:                "None",
+			PublishNotReadyAddresses: true,
+			Selector: map[string]string{
+				"ray.io/cluster": instance.Name,
+			},
+			Ports: []corev1.ServicePort{
+				// TODO can ports be specified in the cr or are these the defaults? use consts
+				{Name: "node-manager-port", Port: 6380, AppProtocol: ptr.To[string]("grpc")},
+				{Name: "object-manager-port", Port: 6381, AppProtocol: ptr.To[string]("grpc")},
+				{Name: "runtime-env-agent-port", Port: 6382, AppProtocol: ptr.To[string]("grpc")},
+				{Name: "dashboard-agent-grpc-port", Port: 6383, AppProtocol: ptr.To[string]("grpc")},
+				{Name: "dashboard-agent-listen-port", Port: 52365, AppProtocol: ptr.To[string]("http")},
+				{Name: "metrics-export-port", Port: 8080, AppProtocol: ptr.To[string]("http")},
+			},
+		},
+	}
+
+	// Add worker ports from 10002 to maxWorkerPort
+	for port := int32(10002); port <= maxWorkerPort; port++ {
+		headlessSvc.Spec.Ports = append(headlessSvc.Spec.Ports, corev1.ServicePort{
+			Name:        fmt.Sprintf("p%d", port),
+			Port:        port,
+			AppProtocol: ptr.To[string]("grpc"),
+		})
+	}
+
+	// Note: We don't set owner reference to avoid automatic deletion
+	// The headless service should persist as long as there are RayClusters in the namespace
+
+	// Try to create the headless service
+	err := r.Create(ctx, headlessSvc)
+	if err != nil {
+		if errors.IsAlreadyExists(err) {
+			// If it already exists, try to update it
+			existingSvc := &corev1.Service{}
+			if err := r.Get(ctx, types.NamespacedName{
+				Name:      headlessSvc.Name,
+				Namespace: instance.Namespace,
+			}, existingSvc); err != nil {
+				return fmt.Errorf("failed to get existing headless service: %w", err)
+			}
+
+			// Update the spec
+			existingSvc.Spec = headlessSvc.Spec
+
+			if err := r.Update(ctx, existingSvc); err != nil {
+				return fmt.Errorf("failed to update existing headless service: %w", err)
+			}
+
+			logger.Info("Updated existing headless service for Istio L7 observability",
+				"namespace", instance.Namespace,
+				"cluster", instance.Name,
+				"service", headlessSvc.Name)
+		} else {
+			return fmt.Errorf("failed to create headless service: %w", err)
+		}
+	} else {
+		logger.Info("Created headless service for Istio L7 observability",
+			"namespace", instance.Namespace,
+			"cluster", instance.Name,
+			"service", headlessSvc.Name,
+			"maxWorkerPort", maxWorkerPort)
 	}
 
 	return nil
@@ -1595,4 +1862,106 @@ func setDefaults(instance *rayv1.RayCluster) {
 			instance.Spec.WorkerGroupSpecs[i].RayStartParams = map[string]string{}
 		}
 	}
+}
+
+// checkAndCleanupMTLSResources checks if this is the last RayCluster in the namespace
+// and cleans up Istio resources (PeerAuthentication and headless service) if it's being deleted and no other RayClusters remain
+func (r *RayClusterReconciler) checkAndCleanupMTLSResources(ctx context.Context, instance *rayv1.RayCluster) error {
+	logger := ctrl.LoggerFrom(ctx)
+
+	// Only check for cleanup if the RayCluster is being deleted
+	if instance.DeletionTimestamp == nil {
+		return nil
+	}
+
+	// Count remaining RayClusters in the namespace (excluding this one)
+	rayClusterList := &rayv1.RayClusterList{}
+	if err := r.List(ctx, rayClusterList, client.InNamespace(instance.Namespace)); err != nil {
+		return fmt.Errorf("failed to list RayClusters in namespace: %w", err)
+	}
+
+	// Count active RayClusters (not being deleted)
+	activeRayClusters := 0
+	for _, cluster := range rayClusterList.Items {
+		// Skip the current instance and count only active ones
+		if cluster.Name != instance.Name && cluster.DeletionTimestamp == nil {
+			activeRayClusters++
+		}
+	}
+
+	// If this is the last RayCluster being deleted, clean up Istio resources
+	if activeRayClusters == 0 {
+		logger.Info("Last RayCluster being deleted, cleaning up Istio resources",
+			"namespace", instance.Namespace,
+			"cluster", instance.Name)
+
+		// Clean up PeerAuthentication
+		peerAuth := &istiosecurityv1beta1.PeerAuthentication{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "default",
+				Namespace: instance.Namespace,
+			},
+		}
+
+		err := r.Delete(ctx, peerAuth)
+		if err != nil {
+			if errors.IsNotFound(err) {
+				// PeerAuthentication doesn't exist, nothing to clean up
+			} else {
+				logger.Error(err, "Failed to delete PeerAuthentication", "namespace", instance.Namespace)
+			}
+		} else {
+			logger.Info("Successfully cleaned up PeerAuthentication",
+				"namespace", instance.Namespace,
+				"cluster", instance.Name)
+		}
+
+		// Clean up headless service
+		headlessSvc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("%s-headless-svc", instance.Name),
+				Namespace: instance.Namespace,
+			},
+		}
+
+		err = r.Delete(ctx, headlessSvc)
+		if err != nil {
+			if errors.IsNotFound(err) {
+				// Headless service doesn't exist, nothing to clean up
+			} else {
+				logger.Error(err, "Failed to delete headless service", "namespace", instance.Namespace)
+			}
+		} else {
+			logger.Info("Successfully cleaned up headless service",
+				"namespace", instance.Namespace,
+				"cluster", instance.Name)
+		}
+
+	} else {
+		logger.Info("Other RayClusters still exist, keeping Istio resources",
+			"namespace", instance.Namespace,
+			"cluster", instance.Name,
+			"remainingClusters", activeRayClusters)
+	}
+
+	return nil
+}
+
+func IsIstioInstalled(discoveryClient discovery.DiscoveryInterface) (bool, error) {
+	gv := schema.GroupVersion{Group: "security.istio.io", Version: "v1beta1"}
+	resourceList, err := discoveryClient.ServerResourcesForGroupVersion(gv.String())
+	if err != nil {
+		if discovery.IsGroupDiscoveryFailedError(err) {
+			return false, nil // Istio CRDs likely not installed
+		}
+		return false, err // Unexpected error
+	}
+
+	for _, r := range resourceList.APIResources {
+		if r.Kind == "PeerAuthentication" {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
