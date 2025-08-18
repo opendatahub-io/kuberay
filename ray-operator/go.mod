@@ -7,6 +7,7 @@ require (
 	github.com/go-logr/logr v1.4.3
 	github.com/go-logr/zapr v1.3.0
 	github.com/jarcoal/httpmock v1.4.0
+	github.com/kr/pretty v0.3.1
 	github.com/onsi/ginkgo/v2 v2.23.4
 	github.com/onsi/gomega v1.37.0
 	github.com/openshift/api v0.0.0-20250602203052-b29811a290c7
@@ -37,6 +38,8 @@ replace go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.35.1 =>
 
 replace github.com/mattn/go-sqlite3 v1.14.14 => github.com/mattn/go-sqlite3 v1.14.18
 
+replace github.com/kr/pretty => github.com/kr/pretty v0.2.1
+
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
@@ -59,6 +62,7 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
+	github.com/kr/text v0.2.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/moby/spdystream v0.5.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
