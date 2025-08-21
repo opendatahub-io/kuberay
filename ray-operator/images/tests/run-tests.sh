@@ -1,6 +1,7 @@
 #!/bin/bash
 
 set -o allexport
+# shellcheck disable=SC1091
 source .env-odh
 set +o allexport
 
