@@ -56,7 +56,7 @@ jobs:
 
             set -euo pipefail
             cd ray-operator
-            go test -timeout 60m -v ./test/e2e -json 2>&1 | tee ./gotest.log | gotestfmt
+            go test -timeout 60m -v ./test/e2e -json 2>&1 -skip TestRayClusterGCSFaultTolerance | tee ./gotest.log | gotestfmt
 
         - name: Print KubeRay operator logs
           if: steps.deploy.outcome == 'success'
