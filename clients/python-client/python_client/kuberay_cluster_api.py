@@ -1,9 +1,9 @@
 """
 Set of APIs to manage rayclusters.
 """
-
 __copyright__ = "Copyright 2021, Microsoft Corp."
 
+import copy
 import logging
 import time
 from kubernetes import client, config
@@ -41,10 +41,7 @@ class RayClusterApi:
         self.kube_config = None
 
     def list_ray_clusters(
-        self,
-        k8s_namespace: str = "default",
-        label_selector: str = "",
-        async_req: bool = False,
+        self, k8s_namespace: str = "default",  label_selector: str = "", async_req: bool = False
     ) -> Any:
         """List Ray clusters in a given namespace.
 
@@ -61,8 +58,8 @@ class RayClusterApi:
         try:
             resource: Any = self.api.list_namespaced_custom_object(
                 group=constants.GROUP,
-                version=constants.CLUSTER_VERSION,
-                plural=constants.CLUSTER_PLURAL,
+                version=constants.VERSION,
+                plural=constants.PLURAL,
                 namespace=k8s_namespace,
                 label_selector=label_selector,
                 async_req=async_req,
@@ -94,8 +91,8 @@ class RayClusterApi:
         try:
             resource: Any = self.api.get_namespaced_custom_object(
                 group=constants.GROUP,
-                version=constants.CLUSTER_VERSION,
-                plural=constants.CLUSTER_PLURAL,
+                version=constants.VERSION,
+                plural=constants.PLURAL,
                 name=name,
                 namespace=k8s_namespace,
             )
@@ -108,32 +105,29 @@ class RayClusterApi:
                 log.error("error fetching custom resource: {}".format(e))
                 return None
 
-    def get_ray_cluster_status(
-        self,
-        name: str,
-        k8s_namespace: str = "default",
-        timeout: int = 60,
-        delay_between_attempts: int = 5,
-    ) -> Any:
-        """Get a specific Ray cluster status in a given namespace.
-
-        This method waits until the cluster has a status field populated by the operator.
+    def get_ray_cluster_status(self, name: str, k8s_namespace: str = "default", timeout: int = 60, delay_between_attempts: int = 5) -> Any:
+        """Get a specific Ray cluster in a given namespace.
 
         Parameters:
-        - name (str): The name of the Ray cluster custom resource.
+        - name (str): The name of the Ray cluster custom resource. Defaults to "".
         - k8s_namespace (str, optional): The namespace in which to retrieve the Ray cluster. Defaults to "default".
-        - timeout (int, optional): The duration in seconds after which we stop trying to get status. Defaults to 60 seconds.
-        - delay_between_attempts (int, optional): The duration in seconds to wait between attempts. Defaults to 5 seconds.
+        - timeout (int, optional): The duration in seconds after which we stop trying to get status if still not set. Defaults to 60 seconds.
+        - delay_between_attempts (int, optional): The duration in seconds to wait between attempts to get status if not set. Defaults to 5 seconds.
+
+
 
         Returns:
-            Any: The custom resource status for the specified Ray cluster, or None if not found or timeout.
+            Any: The custom resource status for the specified Ray cluster, or None if not found.
+
+        Raises:
+            ApiException: If there was an error fetching the custom resource.
         """
-        while timeout > 0:
+        while (timeout > 0):
             try:
                 resource: Any = self.api.get_namespaced_custom_object_status(
                     group=constants.GROUP,
-                    version=constants.CLUSTER_VERSION,
-                    plural=constants.CLUSTER_PLURAL,
+                    version=constants.VERSION,
+                    plural=constants.PLURAL,
                     name=name,
                     namespace=k8s_namespace,
                 )
@@ -145,68 +139,43 @@ class RayClusterApi:
                     log.error("error fetching custom resource: {}".format(e))
                     return None
 
-            if resource and "status" in resource and resource["status"]:
-                return resource["status"]
+            if resource["status"]:
+                    return resource["status"]
             else:
                 log.info("raycluster {} status not set yet, waiting...".format(name))
                 time.sleep(delay_between_attempts)
                 timeout -= delay_between_attempts
 
-        log.info("timed out waiting for raycluster {} status".format(name))
+        log.info("raycluster {} status not set yet, timing out...".format(name))
         return None
 
-    def wait_until_ray_cluster_running(
-        self,
-        name: str,
-        k8s_namespace: str = "default",
-        timeout: int = 60,
-        delay_between_attempts: int = 5,
-    ) -> bool:
-        """Wait until a Ray cluster is in ready state.
-
-        This method waits for the cluster to have a state field with value 'ready'.
+    def wait_until_ray_cluster_running(self, name: str, k8s_namespace: str = "default", timeout: int=60, delay_between_attempts: int = 5) -> bool:
+        """Get a specific Ray cluster in a given namespace.
 
         Parameters:
-        - name (str): The name of the Ray cluster custom resource.
+        - name (str): The name of the Ray cluster custom resource. Defaults to "".
         - k8s_namespace (str, optional): The namespace in which to retrieve the Ray cluster. Defaults to "default".
-        - timeout (int, optional): The duration in seconds after which we stop trying. Defaults to 60 seconds.
-        - delay_between_attempts (int, optional): The duration in seconds to wait between attempts. Defaults to 5 seconds.
+        - timeout (int, optional): The duration in seconds after which we stop trying to get status. Defaults to 60 seconds.
+        - delay_between_attempts (int, optional): The duration in seconds to wait between attempts to get status if not set. Defaults to 5 seconds.
+
+
 
         Returns:
-            bool: True if the raycluster status is 'ready', False otherwise.
+            Bool: True if the raycluster status is Running, False otherwise.
+
         """
-        while timeout > 0:
-            status = self.get_ray_cluster_status(
-                name, k8s_namespace, timeout, delay_between_attempts
-            )
+        status = self.get_ray_cluster_status(name, k8s_namespace, timeout, delay_between_attempts)
 
-            if status and "state" in status:
-                current_state = status["state"]
-                if current_state == "ready":
-                    log.info(
-                        "raycluster {} is ready with state: {}".format(
-                            name, current_state
-                        )
-                    )
-                    return True
-                else:
-                    log.info(
-                        "raycluster {} is in state: {} (waiting for ready)".format(
-                            name, current_state
-                        )
-                    )
-            else:
-                log.info(
-                    "raycluster {} state field not available yet, waiting...".format(
-                        name
-                    )
-                )
+        #TODO: once we add State to Status, we should check for that as well  <if status and status["state"] == "Running":>
+        if status and status["head"] and status["head"]["serviceIP"]:
+            return True
 
-            time.sleep(delay_between_attempts)
-            timeout -= delay_between_attempts
-
-        log.info("raycluster {} has not become ready before timeout".format(name))
+        log.info("raycluster {} status is not running yet, current status is {}".format(name, status["state"] if status else "unknown"))
         return False
+
+
+
+
 
     def create_ray_cluster(self, body: Any, k8s_namespace: str = "default") -> Any:
         """Create a new Ray cluster custom resource.
@@ -221,8 +190,8 @@ class RayClusterApi:
         try:
             resource: Any = self.api.create_namespaced_custom_object(
                 group=constants.GROUP,
-                version=constants.CLUSTER_VERSION,
-                plural=constants.CLUSTER_PLURAL,
+                version=constants.VERSION,
+                plural=constants.PLURAL,
                 body=body,
                 namespace=k8s_namespace,
             )
@@ -250,8 +219,8 @@ class RayClusterApi:
         try:
             resource: Any = self.api.delete_namespaced_custom_object(
                 group=constants.GROUP,
-                version=constants.CLUSTER_VERSION,
-                plural=constants.CLUSTER_PLURAL,
+                version=constants.VERSION,
+                plural=constants.PLURAL,
                 name=name,
                 namespace=k8s_namespace,
             )
@@ -287,8 +256,8 @@ class RayClusterApi:
             # we patch the existing raycluster with the new config
             self.api.patch_namespaced_custom_object(
                 group=constants.GROUP,
-                version=constants.CLUSTER_VERSION,
-                plural=constants.CLUSTER_PLURAL,
+                version=constants.VERSION,
+                plural=constants.PLURAL,
                 name=name,
                 body=ray_patch,
                 namespace=k8s_namespace,

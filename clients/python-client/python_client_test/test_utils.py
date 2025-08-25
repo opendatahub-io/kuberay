@@ -4,8 +4,9 @@ import re
 from python_client.utils import kuberay_cluster_utils, kuberay_cluster_builder
 
 
+
 test_cluster_body: dict = {
-    "apiVersion": "ray.io/v1",
+    "apiVersion": "ray.io/v1alpha1",
     "kind": "RayCluster",
     "metadata": {
         "labels": {"controller-tools.k8s.io": "1.0"},

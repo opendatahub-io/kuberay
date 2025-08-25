@@ -1,4 +1,4 @@
-package e2erayjob
+package e2e
 
 import (
 	"testing"
@@ -23,7 +23,7 @@ func TestRayJob(t *testing.T) {
 	namespace := test.NewTestNamespace()
 
 	// Job scripts
-	jobsAC := NewConfigMap(namespace.Name, Files(test, "counter.py", "fail.py", "stop.py", "long_running.py"))
+	jobsAC := newConfigMap(namespace.Name, files(test, "counter.py", "fail.py", "stop.py", "long_running.py"))
 	jobs, err := test.Client().Core().CoreV1().ConfigMaps(namespace.Name).Apply(test.Ctx(), jobsAC, TestApplyOptions)
 	g.Expect(err).NotTo(HaveOccurred())
 	LogWithTimestamp(test.T(), "Created ConfigMap %s/%s successfully", jobs.Namespace, jobs.Name)
@@ -32,14 +32,14 @@ func TestRayJob(t *testing.T) {
 		// RayJob
 		rayJobAC := rayv1ac.RayJob("counter", namespace.Name).
 			WithSpec(rayv1ac.RayJobSpec().
-				WithRayClusterSpec(NewRayClusterSpec(MountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs"))).
+				WithRayClusterSpec(newRayClusterSpec(mountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs"))).
 				WithEntrypoint("python /home/ray/jobs/counter.py").
 				WithRuntimeEnvYAML(`
 env_vars:
   counter_name: test_counter
 `).
 				WithShutdownAfterJobFinishes(true).
-				WithSubmitterPodTemplate(JobSubmitterPodTemplateApplyConfiguration()))
+				WithSubmitterPodTemplate(jobSubmitterPodTemplateApplyConfiguration()))
 
 		rayJob, err := test.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(test.Ctx(), rayJobAC, TestApplyOptions)
 		g.Expect(err).NotTo(HaveOccurred())
@@ -95,10 +95,10 @@ env_vars:
 		// RayJob
 		rayJobAC := rayv1ac.RayJob("fail", namespace.Name).
 			WithSpec(rayv1ac.RayJobSpec().
-				WithRayClusterSpec(NewRayClusterSpec(MountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs"))).
+				WithRayClusterSpec(newRayClusterSpec(mountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs"))).
 				WithEntrypoint("python /home/ray/jobs/fail.py").
 				WithShutdownAfterJobFinishes(false).
-				WithSubmitterPodTemplate(JobSubmitterPodTemplateApplyConfiguration()))
+				WithSubmitterPodTemplate(jobSubmitterPodTemplateApplyConfiguration()))
 
 		rayJob, err := test.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(test.Ctx(), rayJobAC, TestApplyOptions)
 		g.Expect(err).NotTo(HaveOccurred())
@@ -143,10 +143,10 @@ env_vars:
 		// RayJob
 		rayJobAC := rayv1ac.RayJob("fail-k8s-job", namespace.Name).
 			WithSpec(rayv1ac.RayJobSpec().
-				WithRayClusterSpec(NewRayClusterSpec(MountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs"))).
+				WithRayClusterSpec(newRayClusterSpec(mountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs"))).
 				WithEntrypoint("The command will be overridden by the submitter Job").
 				WithShutdownAfterJobFinishes(true).
-				WithSubmitterPodTemplate(JobSubmitterPodTemplateApplyConfiguration()))
+				WithSubmitterPodTemplate(jobSubmitterPodTemplateApplyConfiguration()))
 
 		// In this test, we try to simulate the case where the submitter Job can't connect to the RayCluster successfully.
 		// Hence, KubeRay can't get the Ray job information from the RayCluster. When the submitter Job reaches the backoff
@@ -189,8 +189,8 @@ env_vars:
 		rayJobAC := rayv1ac.RayJob("stop", namespace.Name).
 			WithSpec(rayv1ac.RayJobSpec().
 				WithEntrypoint("python /home/ray/jobs/stop.py").
-				WithSubmitterPodTemplate(JobSubmitterPodTemplateApplyConfiguration()).
-				WithRayClusterSpec(NewRayClusterSpec(MountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs"))))
+				WithSubmitterPodTemplate(jobSubmitterPodTemplateApplyConfiguration()).
+				WithRayClusterSpec(newRayClusterSpec(mountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs"))))
 
 		rayJob, err := test.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(test.Ctx(), rayJobAC, TestApplyOptions)
 		g.Expect(err).NotTo(HaveOccurred())
@@ -218,7 +218,7 @@ env_vars:
 			WithSpec(rayv1ac.RayJobSpec().
 				WithEntrypoint("python /home/ray/jobs/counter.py").
 				WithRuntimeEnvYAML(`invalid_yaml_string`).
-				WithRayClusterSpec(NewRayClusterSpec(MountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs"))))
+				WithRayClusterSpec(newRayClusterSpec(mountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs"))))
 
 		rayJob, err := test.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(test.Ctx(), rayJobAC, TestApplyOptions)
 		g.Expect(err).NotTo(HaveOccurred())
@@ -232,12 +232,12 @@ env_vars:
 	test.T().Run("RayJob has passed ActiveDeadlineSeconds", func(_ *testing.T) {
 		rayJobAC := rayv1ac.RayJob("long-running", namespace.Name).
 			WithSpec(rayv1ac.RayJobSpec().
-				WithRayClusterSpec(NewRayClusterSpec(MountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs"))).
+				WithRayClusterSpec(newRayClusterSpec(mountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs"))).
 				WithEntrypoint("python /home/ray/jobs/long_running.py").
 				WithShutdownAfterJobFinishes(true).
 				WithTTLSecondsAfterFinished(600).
 				WithActiveDeadlineSeconds(5).
-				WithSubmitterPodTemplate(JobSubmitterPodTemplateApplyConfiguration()))
+				WithSubmitterPodTemplate(jobSubmitterPodTemplateApplyConfiguration()))
 
 		rayJob, err := test.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(test.Ctx(), rayJobAC, TestApplyOptions)
 		g.Expect(err).NotTo(HaveOccurred())
@@ -255,14 +255,14 @@ env_vars:
 		// RayJob
 		rayJobAC := rayv1ac.RayJob("managed-externally", namespace.Name).
 			WithSpec(rayv1ac.RayJobSpec().
-				WithRayClusterSpec(NewRayClusterSpec(MountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs"))).
+				WithRayClusterSpec(newRayClusterSpec(mountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs"))).
 				WithEntrypoint("python /home/ray/jobs/counter.py").
 				WithRuntimeEnvYAML(`
 env_vars:
   counter_name: test_counter
 `).
 				WithShutdownAfterJobFinishes(true).
-				WithSubmitterPodTemplate(JobSubmitterPodTemplateApplyConfiguration()).
+				WithSubmitterPodTemplate(jobSubmitterPodTemplateApplyConfiguration()).
 				WithManagedBy("kueue.x-k8s.io/multikueue"))
 
 		rayJob, err := test.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(test.Ctx(), rayJobAC, TestApplyOptions)

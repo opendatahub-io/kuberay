@@ -53,9 +53,9 @@ class ClusterUtils:
         assert self.is_valid_name(name)
 
         cluster["apiVersion"] = "{group}/{version}".format(
-            group=constants.GROUP, version=constants.CLUSTER_VERSION
+            group=constants.GROUP, version=constants.VERSION
         )
-        cluster["kind"] = constants.CLUSTER_KIND
+        cluster["kind"] = constants.KIND
         cluster["metadata"] = {
             "name": name,
             "namespace": k8s_namespace,

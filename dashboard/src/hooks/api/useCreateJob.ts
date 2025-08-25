@@ -4,6 +4,7 @@ import { useSnackBar } from "@/components/SnackBarProvider";
 import { useNamespace } from "@/components/NamespaceProvider";
 import { useRouter } from "next/navigation";
 import { config } from "@/utils/constants";
+import { Job } from "@/types/rayjob";
 
 // TODO: still hard-coded
 async function _createJob(

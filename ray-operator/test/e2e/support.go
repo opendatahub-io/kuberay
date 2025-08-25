@@ -1,4 +1,4 @@
-package e2eautoscaler
+package e2e
 
 import (
 	"embed"
@@ -42,7 +42,7 @@ func options[T any](options ...option[T]) option[T] {
 }
 
 func newConfigMap(namespace string, options ...option[corev1ac.ConfigMapApplyConfiguration]) *corev1ac.ConfigMapApplyConfiguration {
-	cmAC := corev1ac.ConfigMap("scripts", namespace).
+	cmAC := corev1ac.ConfigMap("jobs", namespace).
 		WithBinaryData(map[string][]byte{}).
 		WithImmutable(true)
 
@@ -68,6 +68,14 @@ func files(t Test, fileNames ...string) option[corev1ac.ConfigMapApplyConfigurat
 	return options(files...)
 }
 
+func newRayClusterSpec(options ...option[rayv1ac.RayClusterSpecApplyConfiguration]) *rayv1ac.RayClusterSpecApplyConfiguration {
+	return rayClusterSpecWith(rayClusterSpec(), options...)
+}
+
+func rayClusterSpecWith(spec *rayv1ac.RayClusterSpecApplyConfiguration, options ...option[rayv1ac.RayClusterSpecApplyConfiguration]) *rayv1ac.RayClusterSpecApplyConfiguration {
+	return apply(spec, options...)
+}
+
 func mountConfigMap[T rayv1ac.RayClusterSpecApplyConfiguration | corev1ac.PodTemplateSpecApplyConfiguration](configMap *corev1.ConfigMap, mountPath string) option[T] {
 	return func(t *T) *T {
 		switch obj := (interface{})(t).(type) {
@@ -91,6 +99,25 @@ func mountConfigMap[T rayv1ac.RayClusterSpecApplyConfiguration | corev1ac.PodTem
 	}
 }
 
+func rayClusterSpec() *rayv1ac.RayClusterSpecApplyConfiguration {
+	return rayv1ac.RayClusterSpec().
+		WithRayVersion(GetRayVersion()).
+		WithHeadGroupSpec(rayv1ac.HeadGroupSpec().
+			WithRayStartParams(map[string]string{"dashboard-host": "0.0.0.0"}).
+			WithTemplate(headPodTemplateApplyConfiguration())).
+		WithWorkerGroupSpecs(rayv1ac.WorkerGroupSpec().
+			WithReplicas(1).
+			WithMinReplicas(1).
+			WithMaxReplicas(1).
+			WithGroupName("small-group").
+			WithRayStartParams(map[string]string{"num-cpus": "1"}).
+			WithTemplate(workerPodTemplateApplyConfiguration()))
+}
+
+func podTemplateSpecApplyConfiguration(template *corev1ac.PodTemplateSpecApplyConfiguration, options ...option[corev1ac.PodTemplateSpecApplyConfiguration]) *corev1ac.PodTemplateSpecApplyConfiguration {
+	return apply(template, options...)
+}
+
 func headPodTemplateApplyConfiguration() *corev1ac.PodTemplateSpecApplyConfiguration {
 	return corev1ac.PodTemplateSpec().
 		WithSpec(corev1ac.PodSpec().
@@ -105,37 +132,12 @@ func headPodTemplateApplyConfiguration() *corev1ac.PodTemplateSpecApplyConfigura
 				).
 				WithResources(corev1ac.ResourceRequirements().
 					WithRequests(corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("1"),
-						corev1.ResourceMemory: resource.MustParse("2G"),
+						corev1.ResourceCPU:    resource.MustParse("300m"),
+						corev1.ResourceMemory: resource.MustParse("1G"),
 					}).
 					WithLimits(corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("1"),
-						corev1.ResourceMemory: resource.MustParse("4G"),
-					}))))
-}
-
-func headPodTemplateApplyConfigurationV2() *corev1ac.PodTemplateSpecApplyConfiguration {
-	return corev1ac.PodTemplateSpec().
-		WithSpec(corev1ac.PodSpec().
-			WithRestartPolicy(corev1.RestartPolicyNever).
-			WithContainers(corev1ac.Container().
-				WithName("ray-head").
-				WithImage(GetRayImage()).
-				WithPorts(
-					corev1ac.ContainerPort().WithName(utils.GcsServerPortName).WithContainerPort(utils.DefaultGcsServerPort),
-					corev1ac.ContainerPort().WithName(utils.ServingPortName).WithContainerPort(utils.DefaultServingPort),
-					corev1ac.ContainerPort().WithName(utils.DashboardPortName).WithContainerPort(utils.DefaultDashboardPort),
-					corev1ac.ContainerPort().WithName(utils.ClientPortName).WithContainerPort(utils.DefaultClientPort),
-				).
-				WithEnv(corev1ac.EnvVar().WithName(utils.RAY_ENABLE_AUTOSCALER_V2).WithValue("1")).
-				WithResources(corev1ac.ResourceRequirements().
-					WithRequests(corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("1"),
-						corev1.ResourceMemory: resource.MustParse("2G"),
-					}).
-					WithLimits(corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("1"),
-						corev1.ResourceMemory: resource.MustParse("4G"),
+						corev1.ResourceCPU:    resource.MustParse("500m"),
+						corev1.ResourceMemory: resource.MustParse("3G"),
 					}))))
 }
 
@@ -147,46 +149,29 @@ func workerPodTemplateApplyConfiguration() *corev1ac.PodTemplateSpecApplyConfigu
 				WithImage(GetRayImage()).
 				WithResources(corev1ac.ResourceRequirements().
 					WithRequests(corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("1"),
+						corev1.ResourceCPU:    resource.MustParse("300m"),
 						corev1.ResourceMemory: resource.MustParse("1G"),
 					}).
 					WithLimits(corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("1"),
+						corev1.ResourceCPU:    resource.MustParse("500m"),
 						corev1.ResourceMemory: resource.MustParse("1G"),
 					}))))
 }
 
-func workerPodTemplateApplyConfigurationV2() *corev1ac.PodTemplateSpecApplyConfiguration {
+func jobSubmitterPodTemplateApplyConfiguration() *corev1ac.PodTemplateSpecApplyConfiguration {
 	return corev1ac.PodTemplateSpec().
 		WithSpec(corev1ac.PodSpec().
 			WithRestartPolicy(corev1.RestartPolicyNever).
 			WithContainers(corev1ac.Container().
-				WithName("ray-worker").
+				WithName("ray-job-submitter").
 				WithImage(GetRayImage()).
 				WithResources(corev1ac.ResourceRequirements().
 					WithRequests(corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("1"),
-						corev1.ResourceMemory: resource.MustParse("1G"),
+						corev1.ResourceCPU:    resource.MustParse("200m"),
+						corev1.ResourceMemory: resource.MustParse("200Mi"),
 					}).
 					WithLimits(corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("1"),
-						corev1.ResourceMemory: resource.MustParse("1G"),
+						corev1.ResourceCPU:    resource.MustParse("500m"),
+						corev1.ResourceMemory: resource.MustParse("500Mi"),
 					}))))
-}
-
-var tests = []struct {
-	HeadPodTemplateGetter   func() *corev1ac.PodTemplateSpecApplyConfiguration
-	WorkerPodTemplateGetter func() *corev1ac.PodTemplateSpecApplyConfiguration
-	name                    string
-}{
-	{
-		HeadPodTemplateGetter:   headPodTemplateApplyConfiguration,
-		WorkerPodTemplateGetter: workerPodTemplateApplyConfiguration,
-		name:                    "Create a RayCluster with autoscaling enabled",
-	},
-	{
-		HeadPodTemplateGetter:   headPodTemplateApplyConfigurationV2,
-		WorkerPodTemplateGetter: workerPodTemplateApplyConfigurationV2,
-		name:                    "Create a RayCluster with autoscaler v2 enabled",
-	},
 }

@@ -1,7 +1,8 @@
-package util
+package apiserversdk
 
 import "time"
 
+// TODO: Make apiserver configs compatible with V1
 const (
 	// Max retry times for HTTP Client
 	HTTPClientDefaultMaxRetry = 3

@@ -13,24 +13,18 @@ import {
 import NextLink from "next/link";
 import WorkIcon from "@mui/icons-material/Work";
 import LanIcon from "@mui/icons-material/Lan";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useFirstVisit } from "@/components/FirstVisitContext";
 import { roblox } from "@/utils/constants";
-import { fetchRuntimeConfig } from "@/utils/constants";
-
 const HomePage = () => {
   const router = useRouter();
   const { firstVisit } = useFirstVisit();
-
   useEffect(() => {
-    fetchRuntimeConfig();
-
     if (firstVisit) {
       router.push("/jobs");
     }
   }, [])
-
   return (
     <>
       <Box

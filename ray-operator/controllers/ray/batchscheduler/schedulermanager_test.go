@@ -8,7 +8,6 @@ import (
 
 	"github.com/ray-project/kuberay/ray-operator/apis/config/v1alpha1"
 	schedulerinterface "github.com/ray-project/kuberay/ray-operator/controllers/ray/batchscheduler/interface"
-	kaischeduler "github.com/ray-project/kuberay/ray-operator/controllers/ray/batchscheduler/kai-scheduler"
 	"github.com/ray-project/kuberay/ray-operator/controllers/ray/batchscheduler/volcano"
 	"github.com/ray-project/kuberay/ray-operator/controllers/ray/batchscheduler/yunikorn"
 )
@@ -17,7 +16,6 @@ func TestGetSchedulerFactory(t *testing.T) {
 	DefaultFactory := &schedulerinterface.DefaultBatchSchedulerFactory{}
 	VolcanoFactory := &volcano.VolcanoBatchSchedulerFactory{}
 	YuniKornFactory := &yunikorn.YuniKornSchedulerFactory{}
-	KaiFactory := &kaischeduler.KaiSchedulerFactory{}
 
 	type args struct {
 		rayConfigs v1alpha1.Configuration
@@ -68,16 +66,6 @@ func TestGetSchedulerFactory(t *testing.T) {
 			want: reflect.TypeOf(VolcanoFactory),
 		},
 		{
-			name: "enableBatchScheduler=false, batchScheduler set to kai-scheduler",
-			args: args{
-				rayConfigs: v1alpha1.Configuration{
-					EnableBatchScheduler: false,
-					BatchScheduler:       kaischeduler.GetPluginName(),
-				},
-			},
-			want: reflect.TypeOf(KaiFactory),
-		},
-		{
 			name: "enableBatchScheduler not set, batchScheduler set to yunikorn",
 			args: args{
 				rayConfigs: v1alpha1.Configuration{
@@ -94,15 +82,6 @@ func TestGetSchedulerFactory(t *testing.T) {
 				},
 			},
 			want: reflect.TypeOf(VolcanoFactory),
-		},
-		{
-			name: "enableBatchScheduler not set, batchScheduler set to kai-scheduler",
-			args: args{
-				rayConfigs: v1alpha1.Configuration{
-					BatchScheduler: kaischeduler.GetPluginName(),
-				},
-			},
-			want: reflect.TypeOf(KaiFactory),
 		},
 		{
 			name: "enableBatchScheduler not set, batchScheduler set to unknown value",

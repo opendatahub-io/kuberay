@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -13,7 +14,6 @@ import (
 	rpcStatus "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 
-	apiserverutil "github.com/ray-project/kuberay/apiserversdk/util"
 	api "github.com/ray-project/kuberay/proto/go_client"
 )
 
@@ -653,6 +653,15 @@ func (krc *KuberayAPIServerClient) doDelete(deleteURL string) (*rpcStatus.Status
 	return status, err
 }
 
+var retryableHTTPStatusCodes = map[int]struct{}{
+	http.StatusRequestTimeout:      {}, // 408
+	http.StatusTooManyRequests:     {}, // 429
+	http.StatusInternalServerError: {}, // 500
+	http.StatusBadGateway:          {}, // 502
+	http.StatusServiceUnavailable:  {}, // 503
+	http.StatusGatewayTimeout:      {}, // 504
+}
+
 func (krc *KuberayAPIServerClient) executeRequest(httpRequest *http.Request, URL string) ([]byte, *rpcStatus.Status, error) {
 	// Set the overall timeout
 	ctx, cancel := context.WithTimeout(context.Background(), krc.retryCfg.OverallTimeout)
@@ -704,7 +713,7 @@ func (krc *KuberayAPIServerClient) executeRequest(httpRequest *http.Request, URL
 			break
 		}
 
-		if apiserverutil.IsSuccessfulStatusCode(statusCode) {
+		if statusCode == http.StatusOK {
 			return bodyBytes, nil, nil
 		}
 
@@ -721,15 +730,16 @@ func (krc *KuberayAPIServerClient) executeRequest(httpRequest *http.Request, URL
 			HTTPStatusCode: statusCode,
 		}
 
-		if !apiserverutil.IsRetryableHTTPStatusCodes(statusCode) {
+		// Retry only for HTTP status in the list
+		if _, retryable := retryableHTTPStatusCodes[statusCode]; !retryable {
 			break
 		}
 
 		// Backoff before retry
-		sleep := apiserverutil.GetRetryBackoff(attempt,
-			krc.retryCfg.InitBackoff,
-			krc.retryCfg.BackoffFactor,
-			krc.retryCfg.MaxBackoff)
+		sleep := krc.retryCfg.InitBackoff * time.Duration(math.Pow(krc.retryCfg.BackoffFactor, float64(attempt)))
+		if sleep > krc.retryCfg.MaxBackoff {
+			sleep = krc.retryCfg.MaxBackoff
+		}
 
 		select {
 		case <-time.After(sleep):
