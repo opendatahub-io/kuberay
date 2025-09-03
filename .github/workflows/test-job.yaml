@@ -6,6 +6,7 @@ on:
     - dev
     - release-*
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - '**'
 
@@ -13,6 +14,7 @@ jobs:
   lint:
     name: Lint (pre-commit)
     runs-on: ubuntu-22.04
+    if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false) }}
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v3
@@ -33,6 +35,7 @@ jobs:
       working-directory: ./apiserver
     name: Build Apiserver and Docker Images
     runs-on: ubuntu-22.04
+    if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false) }}
     steps:
       - name: Set up Go
         uses: actions/setup-go@v3
@@ -109,6 +112,7 @@ jobs:
       working-directory: ./apiserversdk
     name: Build apiserversdk
     runs-on: ubuntu-22.04
+    if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false) }}
     steps:
       - name: Set up Go
         uses: actions/setup-go@v3
@@ -137,6 +141,7 @@ jobs:
       working-directory: ./experimental
     name: Build security proxy Binaries and Docker Images
     runs-on: ubuntu-22.04
+    if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false) }}
     steps:
 
       - name: Set up Go
@@ -211,6 +216,7 @@ jobs:
       working-directory: ./ray-operator
     name: Build Operator Binaries and Docker Images
     runs-on: ubuntu-22.04
+    if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false) }}
     steps:
 
     - name: Set up Go
@@ -325,6 +331,7 @@ jobs:
       working-directory: ./kubectl-plugin
     name: Build Ray Kubectl plugin
     runs-on: ubuntu-22.04
+    if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false) }}
     steps:
       - name: Set up Go
         uses: actions/setup-go@v3
