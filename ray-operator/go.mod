@@ -2,7 +2,7 @@ module github.com/ray-project/kuberay/ray-operator
 
 go 1.24.0
 
-toolchain go1.24.2
+toolchain go1.25.1
 
 replace github.com/imdario/mergo => github.com/imdario/mergo v0.3.16
 

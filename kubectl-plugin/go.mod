@@ -2,7 +2,7 @@ module github.com/ray-project/kuberay/kubectl-plugin
 
 go 1.24.0
 
-toolchain go1.24.2
+toolchain go1.25.1
 
 require (
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510

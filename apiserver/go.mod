@@ -2,7 +2,7 @@ module github.com/ray-project/kuberay/apiserver
 
 go 1.24.0
 
-toolchain go1.24.2
+toolchain go1.25.1
 
 require (
 	github.com/pkg/errors v0.9.1

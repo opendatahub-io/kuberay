@@ -2,7 +2,7 @@ module github.com/ray-project/kuberay/proto
 
 go 1.24.0
 
-toolchain go1.24.2
+toolchain go1.25.1
 
 require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.26.3
