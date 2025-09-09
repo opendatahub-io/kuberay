@@ -73,12 +73,13 @@ jobs:
             go test -timeout 60m -v ./test/e2erayjob -json 2>&1 | tee ./goteste2erayjob.log | gotestfmt
 
         - name: Print KubeRay operator logs
-          if: steps.deploy.outcome == 'success'
+          if: always()
           run: |
             echo "Printing KubeRay operator logs"
             kubectl logs -n default --tail -1 -l app.kubernetes.io/name=kuberay-operator app.kubernetes.io/name=kuberay | tee ./kuberay-operator.log
 
         - name: Upload logs
+          if: always()
           uses: actions/upload-artifact@v4
           with:
             name: logs
