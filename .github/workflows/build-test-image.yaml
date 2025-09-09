@@ -26,7 +26,12 @@ jobs:
 
       - name: Login to Quay.io
         id: podman-login-quay
-        run:  podman login --username ${{ secrets.QUAY_ODH_KUBERAY_TESTS_USERNAME }} --password ${{ secrets.QUAY_ODH_KUBERAY_TESTS_PASSWORD }} quay.io
+        env:
+          QUAY_USERNAME: ${{ secrets.QUAY_ODH_KUBERAY_TESTS_USERNAME }}
+          QUAY_PASSWORD: ${{ secrets.QUAY_ODH_KUBERAY_TESTS_PASSWORD }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$QUAY_PASSWORD" | podman login --username "$QUAY_USERNAME" --password-stdin quay.io
 
       - name: Build test image
         run: make build-test-image
