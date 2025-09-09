@@ -1,0 +1,46 @@
+name: Build and Push Test Image
+
+on:
+  push:
+    branches:
+      - dev
+      - 'release-*'
+  workflow_dispatch:
+    inputs:
+      E2E_TEST_IMAGE_VERSION:
+        description: 'Tag for the test image (defaults to latest)'
+        required: false
+        default: 'latest'
+        type: string
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    env:
+      E2E_TEST_IMAGE_VERSION: ${{ github.event.inputs.E2E_TEST_IMAGE_VERSION || 'latest' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Setup Podman
+        uses: redhat-actions/setup-podman@v2
+
+      - name: Login to Quay.io
+        id: podman-login-quay
+        uses: redhat-actions/podman-login@v1
+        with:
+          registry: quay.io
+          username: ${{ secrets.QUAY_ODH_KUBERAY_TESTS_USERNAME }}
+          password: ${{ secrets.QUAY_ODH_KUBERAY_TESTS_PASSWORD }}
+
+      - name: Build test image
+        run: make build-test-image
+
+      - name: Push test image
+        run: make push-test-image
+
+      - name: Logout from Quay.io
+        if: always() && steps.podman-login-quay.outcome == 'success'
+        run: podman logout quay.io
