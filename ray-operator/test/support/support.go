@@ -146,12 +146,12 @@ func HeadPodTemplateApplyConfiguration() *corev1ac.PodTemplateSpecApplyConfigura
 				).
 				WithResources(corev1ac.ResourceRequirements().
 					WithRequests(corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("300m"),
+						corev1.ResourceCPU:    resource.MustParse("500m"),
 						corev1.ResourceMemory: resource.MustParse("1G"),
 					}).
 					WithLimits(corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("500m"),
-						corev1.ResourceMemory: resource.MustParse("2G"),
+						corev1.ResourceCPU:    resource.MustParse("2000m"),
+						corev1.ResourceMemory: resource.MustParse("3G"),
 					}))))
 }
 
@@ -167,8 +167,8 @@ func WorkerPodTemplateApplyConfiguration() *corev1ac.PodTemplateSpecApplyConfigu
 						corev1.ResourceMemory: resource.MustParse("1G"),
 					}).
 					WithLimits(corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("500m"),
-						corev1.ResourceMemory: resource.MustParse("1G"),
+						corev1.ResourceCPU:    resource.MustParse("1000m"),
+						corev1.ResourceMemory: resource.MustParse("3G"),
 					}))))
 }
 
