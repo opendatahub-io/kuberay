@@ -19,16 +19,15 @@ jobs:
           repository: project-codeflare/kuberay-post-merge-tests
           event-type: branch-dispatch
 
-      - name: Poll Project-Codeflare dummy repo for workflow completion
+      - name: Poll Project-Codeflare kuberay-post-merge-tests repo for workflow completion
         env:
-          GH_TOKEN: ${{ secrets.PAT_KEY }}
+          GH_TOKEN: ${{ secrets.KUBERAY_DISPATCH_TESTS }}
           ORG: project-codeflare
           REPO: kuberay-post-merge-tests
-          BRANCH: ${{ inputs.branch }}
         run: |
           # TODO - check if there is an existing run and abort if there is
           sleep 30 # to allow for run to start
-          echo "Polling Org A for branch $BRANCH..."
+          echo "Polling $ORG/$REPO..."
 
           workflow_id=$(gh api repos/$ORG/$REPO/actions/workflows \
             | jq -r '.workflows[] | select(.name=="Test KubeRay Operator Upgrade to latest available helm image") | .id')
