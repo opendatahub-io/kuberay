@@ -1,0 +1,79 @@
+name: Dispatch
+on:
+  workflow_dispatch
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Trigger kuberay upgrade job
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.KUBERAY_DISPATCH_TESTS }}
+          repository: project-codeflare/kuberay-post-merge-tests
+          event-type: branch-dispatch
+
+      - name: Poll Project-Codeflare dummy repo for workflow completion
+        env:
+          GH_TOKEN: ${{ secrets.PAT_KEY }}
+          ORG: project-codeflare
+          REPO: kuberay-post-merge-tests
+          BRANCH: ${{ inputs.branch }}
+        run: |
+          # TODO - check if there is an existing run and abort if there is
+          sleep 30 # to allow for run to start
+          echo "Polling Org A for branch $BRANCH..."
+
+          workflow_id=$(gh api repos/$ORG/$REPO/actions/workflows \
+            | jq -r '.workflows[] | select(.name=="Test KubeRay Operator Upgrade to latest available helm image") | .id')
+
+          if [ -z "$workflow_id" ]; then
+            echo "❌ Workflow ID not found" && exit 1
+          fi
+
+          for i in {1..10}; do
+            run_id=$(
+              gh api repos/$ORG/$REPO/actions/runs \
+                --paginate \
+                --jq "[.workflow_runs[] | select(.workflow_id==$workflow_id)] | first | .id" \
+                || true
+            )
+
+            echo "$run_id"
+
+            if [[ -n "$run_id" && "$run_id" != "null" ]]; then
+              break
+            fi
+
+            echo "Waiting for run to start..."
+            sleep 5
+          done
+
+          if [ -z "$run_id" ]; then
+            echo "❌ Workflow run not found" && exit 1
+          fi
+
+          echo "Monitoring run ID $run_id..."
+
+          for i in {1..90}; do
+            status=$(gh api repos/$ORG/$REPO/actions/runs/$run_id --jq '.status')
+            conclusion=$(gh api repos/$ORG/$REPO/actions/runs/$run_id --jq '.conclusion')
+
+            echo "Status: $status | Conclusion: $conclusion"
+
+            if [[ "$status" == "completed" ]]; then
+              if [[ "$conclusion" == "success" ]]; then
+                echo "✅ Org A workflow completed successfully"
+                exit 0
+              else
+                echo "❌ Org A workflow failed"
+                exit 1
+              fi
+            fi
+
+            sleep 10
+          done
+
+          echo "❌ Timeout waiting for Org A workflow"
+          exit 1
