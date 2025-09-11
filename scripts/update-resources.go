@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"go/ast"
 	"go/format"
@@ -22,27 +23,60 @@ type ResourceSpec struct {
 	WorkerMemoryLimit   string
 }
 
+// getResourceSpec returns the appropriate resource specification based on the scenario
+func getResourceSpec(scenario string) (ResourceSpec, error) {
+	switch scenario {
+	case "build-image":
+		return ResourceSpec{
+			HeadCPURequest:      `"500m"`,
+			HeadMemoryRequest:   `"6G"`,
+			HeadCPULimit:        `"2000m"`,
+			HeadMemoryLimit:     `"10G"`,
+			WorkerCPURequest:    `"500m"`,
+			WorkerMemoryRequest: `"1G"`, // Stays the same
+			WorkerCPULimit:      `"1000m"`,
+			WorkerMemoryLimit:   `"3G"`,
+		}, nil
+	case "pr":
+		return ResourceSpec{
+			HeadCPURequest:      `"500m"`,
+			HeadMemoryRequest:   `"1G"`,
+			HeadCPULimit:        `"2000m"`,
+			HeadMemoryLimit:     `"3G"`,
+			WorkerCPURequest:    `"300m"`,
+			WorkerMemoryRequest: `"1G"`, // Stays the same
+			WorkerCPULimit:      `"1000m"`,
+			WorkerMemoryLimit:   `"3G"`,
+		}, nil
+	default:
+		return ResourceSpec{}, fmt.Errorf("unknown scenario: %s. Available scenarios: build-image, pr", scenario)
+	}
+}
+
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run update-resources.go <path-to-support.go>")
+	var scenario = flag.String("scenario", "build-image", "Resource scenario to apply (build-image, pr)")
+	flag.Parse()
+
+	args := flag.Args()
+	if len(args) < 1 {
+		fmt.Println("Usage: go run update-resources.go [-scenario build-image|pr] <path-to-support.go>")
+		fmt.Println("  -scenario: Resource scenario to apply")
+		fmt.Println("    build-image: Build image scenario with higher resources")
+		fmt.Println("    pr:          PR scenario with lower resources for head memory")
 		os.Exit(1)
 	}
 
-	filePath := os.Args[1]
+	filePath := args[0]
 
-	// Define the target resource specifications
-	spec := ResourceSpec{
-		HeadCPURequest:      `"500m"`,
-		HeadMemoryRequest:   `"6G"`,
-		HeadCPULimit:        `"2000m"`,
-		HeadMemoryLimit:     `"10G"`,
-		WorkerCPURequest:    `"500m"`,
-		WorkerMemoryRequest: `"1G"`, // Stays the same
-		WorkerCPULimit:      `"1000m"`,
-		WorkerMemoryLimit:   `"3G"`,
+	// Get the appropriate resource specification based on scenario
+	spec, err := getResourceSpec(*scenario)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
 	}
 
-	err := updateResourcesInFile(filePath, spec)
+	fmt.Printf("Applying scenario '%s' to %s\n", *scenario, filePath)
+	err = updateResourcesInFile(filePath, spec)
 	if err != nil {
 		fmt.Printf("Error updating resources: %v\n", err)
 		os.Exit(1)

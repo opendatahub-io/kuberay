@@ -15,7 +15,7 @@ build-test-image:
 	# Update resource requirements in support.go using Go AST manipulation
 	@echo "Updating resource requirements using Go AST manipulation..."
 	@cd scripts && go build -o update-resources update-resources.go
-	@scripts/update-resources ray-operator/test/support/support.go
+	@scripts/update-resources -scenario build-image ray-operator/test/support/support.go
 	@echo "Resource requirements updated successfully using Go AST."
 	# Build the Docker image using podman
 	podman build -f ray-operator/images/tests/Dockerfile -t $(E2E_TEST_IMAGE) .
