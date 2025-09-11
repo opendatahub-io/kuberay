@@ -1,6 +1,11 @@
 name: Dispatch
 on:
-  workflow_dispatch
+  push:
+    branches:
+    - dev
+    - release-*
+  workflow_dispatch:
+
 jobs:
   dispatch:
     runs-on: ubuntu-latest
