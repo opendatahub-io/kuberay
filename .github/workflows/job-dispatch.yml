@@ -68,10 +68,10 @@ jobs:
 
             if [[ "$status" == "completed" ]]; then
               if [[ "$conclusion" == "success" ]]; then
-                echo "✅ Org A workflow completed successfully"
+                echo "✅ kuberay-post-merge-tests workflow completed successfully"
                 exit 0
               else
-                echo "❌ Org A workflow failed"
+                echo "❌ kuberay-post-merge-tests workflow failed"
                 exit 1
               fi
             fi
@@ -79,5 +79,5 @@ jobs:
             sleep 10
           done
 
-          echo "❌ Timeout waiting for Org A workflow"
+          echo "❌ Timeout waiting for kuberay-post-merge-tests workflow"
           exit 1
