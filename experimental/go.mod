@@ -6,7 +6,7 @@ toolchain go1.24.2
 
 require (
 	google.golang.org/grpc v1.72.0
-	google.golang.org/protobuf v1.36.6
+	google.golang.org/protobuf v1.36.9
 	k8s.io/klog/v2 v2.130.1
 )
 
