@@ -21,6 +21,13 @@ type ResourceSpec struct {
 	WorkerMemoryRequest string
 	WorkerCPULimit      string
 	WorkerMemoryLimit   string
+	// Ray start parameters
+	RayHeadNumCpus       string
+	RayHeadNumGpus       string
+	RayWorkerNumCpus     string
+	RayWorkerNumGpus     string
+	RayEntrypointNumCpus string
+	RayEntrypointNumGpus string
 }
 
 // getResourceSpec returns the appropriate resource specification based on the scenario
@@ -36,6 +43,13 @@ func getResourceSpec(scenario string) (ResourceSpec, error) {
 			WorkerMemoryRequest: `"1G"`, // Stays the same
 			WorkerCPULimit:      `"1000m"`,
 			WorkerMemoryLimit:   `"3G"`,
+			// Ray start parameters - only update num-cpus to 8
+			RayHeadNumCpus:       `"8"`,
+			RayHeadNumGpus:       `""`, // Empty = no change
+			RayWorkerNumCpus:     `""`, // Empty = no change
+			RayWorkerNumGpus:     `""`, // Empty = no change
+			RayEntrypointNumCpus: `""`, // Empty = no change
+			RayEntrypointNumGpus: `""`, // Empty = no change
 		}, nil
 	case "pr":
 		return ResourceSpec{
@@ -47,6 +61,13 @@ func getResourceSpec(scenario string) (ResourceSpec, error) {
 			WorkerMemoryRequest: `"1G"`, // Stays the same
 			WorkerCPULimit:      `"1000m"`,
 			WorkerMemoryLimit:   `"3G"`,
+			// Ray start parameters - no changes for PR scenario
+			RayHeadNumCpus:       `""`, // Empty = no change
+			RayHeadNumGpus:       `""`, // Empty = no change
+			RayWorkerNumCpus:     `""`, // Empty = no change
+			RayWorkerNumGpus:     `""`, // Empty = no change
+			RayEntrypointNumCpus: `""`, // Empty = no change
+			RayEntrypointNumGpus: `""`, // Empty = no change
 		}, nil
 	default:
 		return ResourceSpec{}, fmt.Errorf("unknown scenario: %s. Available scenarios: build-image, pr", scenario)
@@ -83,6 +104,11 @@ func main() {
 	}
 
 	fmt.Printf("Successfully updated resources in %s\n", filePath)
+
+	// Print confirmation of what was updated in test files
+	if strings.Contains(filePath, "test/") && strings.Contains(filePath, ".go") {
+		printTestFileConfirmation(filePath)
+	}
 }
 
 func updateResourcesInFile(filePath string, spec ResourceSpec) error {
@@ -99,6 +125,15 @@ func updateResourcesInFile(filePath string, spec ResourceSpec) error {
 			if funcDecl.Name != nil {
 				processFunctionDecl(funcDecl, spec)
 			}
+		}
+		return true
+	})
+
+	// Also process Ray start parameters and entrypoint configurations
+	ast.Inspect(file, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			processRayStartParams(call, spec)
+			processEntrypointParams(call, spec)
 		}
 		return true
 	})
@@ -180,38 +215,113 @@ func processResourceEntry(kv *ast.KeyValueExpr, isHeadFunction, isRequests bool,
 		if isResourceMustParseCall(call) && len(call.Args) > 0 {
 			if lit, ok := call.Args[0].(*ast.BasicLit); ok {
 				newValue := getTargetValue(isHeadFunction, isCPU, isRequests, spec)
-				if newValue != "" && lit.Value != newValue {
-					fmt.Printf("  Updating %s: %s -> %s (Function: %s, CPU: %t, Requests: %t)\n",
-						lit.Value, lit.Value, newValue,
-						map[bool]string{true: "Head", false: "Worker"}[isHeadFunction],
-						isCPU, isRequests)
-					lit.Value = newValue
+				// Skip if newValue is empty (no change desired) or if values already match
+				if newValue == "" || newValue == `""` || lit.Value == newValue {
+					return
 				}
+				fmt.Printf("  Updating %s: %s -> %s (Function: %s, CPU: %t, Requests: %t)\n",
+					lit.Value, lit.Value, newValue,
+					map[bool]string{true: "Head", false: "Worker"}[isHeadFunction],
+					isCPU, isRequests)
+				lit.Value = newValue
 			}
 		}
 	}
 }
 
 func getTargetValue(isHeadFunction, isCPU, isRequests bool, spec ResourceSpec) string {
+	var value string
 	switch {
 	case isHeadFunction && isCPU && isRequests:
-		return spec.HeadCPURequest
+		value = spec.HeadCPURequest
 	case isHeadFunction && !isCPU && isRequests:
-		return spec.HeadMemoryRequest
+		value = spec.HeadMemoryRequest
 	case isHeadFunction && isCPU && !isRequests:
-		return spec.HeadCPULimit
+		value = spec.HeadCPULimit
 	case isHeadFunction && !isCPU && !isRequests:
-		return spec.HeadMemoryLimit
+		value = spec.HeadMemoryLimit
 	case !isHeadFunction && isCPU && isRequests:
-		return spec.WorkerCPURequest
+		value = spec.WorkerCPURequest
 	case !isHeadFunction && !isCPU && isRequests:
-		return spec.WorkerMemoryRequest
+		value = spec.WorkerMemoryRequest
 	case !isHeadFunction && isCPU && !isRequests:
-		return spec.WorkerCPULimit
+		value = spec.WorkerCPULimit
 	case !isHeadFunction && !isCPU && !isRequests:
-		return spec.WorkerMemoryLimit
+		value = spec.WorkerMemoryLimit
 	}
-	return ""
+	// Return empty string if value is empty (no change desired)
+	if value == `""` {
+		return ""
+	}
+	return value
+}
+
+// printTestFileConfirmation shows what was updated in test files
+func printTestFileConfirmation(filePath string) {
+	fmt.Printf("\n=== Test File Update Confirmation: %s ===\n", filePath)
+
+	// Check for Ray start parameters
+	if strings.Contains(filePath, "rayjob_lightweight_test.go") {
+		fmt.Printf("Checking Ray start parameters in test file...\n")
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			fmt.Printf("Could not read file for confirmation: %v\n", err)
+			return
+		}
+
+		lines := strings.Split(string(content), "\n")
+		for i, line := range lines {
+			if strings.Contains(line, "num-cpus") {
+				fmt.Printf("Line %d: %s\n", i+1, strings.TrimSpace(line))
+			}
+			if strings.Contains(line, "num-gpus") {
+				fmt.Printf("Line %d: %s\n", i+1, strings.TrimSpace(line))
+			}
+			if strings.Contains(line, "WithEntrypointNumCpus") {
+				fmt.Printf("Line %d: %s\n", i+1, strings.TrimSpace(line))
+			}
+			if strings.Contains(line, "WithEntrypointNumGpus") {
+				fmt.Printf("Line %d: %s\n", i+1, strings.TrimSpace(line))
+			}
+		}
+	}
+
+	// Check for pod resource limits
+	if strings.Contains(filePath, "support.go") {
+		fmt.Printf("Checking pod resource limits in support file...\n")
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			fmt.Printf("Could not read file for confirmation: %v\n", err)
+			return
+		}
+
+		lines := strings.Split(string(content), "\n")
+		inHeadFunction := false
+		inWorkerFunction := false
+
+		for i, line := range lines {
+			if strings.Contains(line, "func HeadPodTemplateApplyConfiguration") {
+				inHeadFunction = true
+				inWorkerFunction = false
+			} else if strings.Contains(line, "func WorkerPodTemplateApplyConfiguration") {
+				inHeadFunction = false
+				inWorkerFunction = true
+			} else if strings.Contains(line, "func ") && !strings.Contains(line, "HeadPodTemplate") && !strings.Contains(line, "WorkerPodTemplate") {
+				inHeadFunction = false
+				inWorkerFunction = false
+			}
+
+			if (inHeadFunction || inWorkerFunction) && strings.Contains(line, "resource.MustParse") {
+				funcType := "Head"
+				if inWorkerFunction {
+					funcType = "Worker"
+				}
+				fmt.Printf("Line %d (%s): %s\n", i+1, funcType, strings.TrimSpace(line))
+			}
+		}
+	}
+
+	fmt.Printf("=== End Confirmation ===\n\n")
 }
 
 // isResourceMustParseCall checks if the call expression is resource.MustParse
@@ -222,4 +332,105 @@ func isResourceMustParseCall(call *ast.CallExpr) bool {
 		}
 	}
 	return false
+}
+
+// processRayStartParams processes WithRayStartParams calls
+func processRayStartParams(call *ast.CallExpr, spec ResourceSpec) {
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+		if sel.Sel.Name == "WithRayStartParams" && len(call.Args) > 0 {
+			if comp, ok := call.Args[0].(*ast.CompositeLit); ok {
+				// Only process if this appears to be head group params (contains dashboard-host)
+				if isHeadGroupRayStartParams(comp) {
+					processRayStartParamsMap(comp, spec)
+				}
+			}
+		}
+	}
+}
+
+// isHeadGroupRayStartParams checks if this looks like head group params
+func isHeadGroupRayStartParams(comp *ast.CompositeLit) bool {
+	for _, elt := range comp.Elts {
+		if kv, ok := elt.(*ast.KeyValueExpr); ok {
+			if keyLit, ok := kv.Key.(*ast.BasicLit); ok && keyLit.Kind == token.STRING {
+				if keyLit.Value == `"dashboard-host"` {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// processRayStartParamsMap processes the map[string]string in WithRayStartParams
+func processRayStartParamsMap(comp *ast.CompositeLit, spec ResourceSpec) {
+	for _, elt := range comp.Elts {
+		if kv, ok := elt.(*ast.KeyValueExpr); ok {
+			if keyLit, ok := kv.Key.(*ast.BasicLit); ok && keyLit.Kind == token.STRING {
+				if valueLit, ok := kv.Value.(*ast.BasicLit); ok && valueLit.Kind == token.STRING {
+					updateRayStartParam(keyLit.Value, valueLit, spec)
+				}
+			}
+		}
+	}
+}
+
+// updateRayStartParam updates a specific Ray start parameter
+func updateRayStartParam(key string, valueLit *ast.BasicLit, spec ResourceSpec) {
+	var newValue string
+	switch key {
+	case `"num-cpus"`:
+		newValue = spec.RayHeadNumCpus
+	case `"num-gpus"`:
+		newValue = spec.RayHeadNumGpus
+	}
+
+	// Skip if newValue is empty (no change desired)
+	if newValue == "" || newValue == `""` {
+		return
+	}
+
+	// Skip if values already match
+	if valueLit.Value == newValue {
+		return
+	}
+
+	fmt.Printf("  Updating Ray start param %s: %s -> %s\n", key, valueLit.Value, newValue)
+	valueLit.Value = newValue
+}
+
+// processEntrypointParams processes WithEntrypointNumCpus and WithEntrypointNumGpus calls
+func processEntrypointParams(call *ast.CallExpr, spec ResourceSpec) {
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+		switch sel.Sel.Name {
+		case "WithEntrypointNumCpus":
+			if len(call.Args) > 0 {
+				updateEntrypointParam(call.Args[0], spec.RayEntrypointNumCpus, "EntrypointNumCpus")
+			}
+		case "WithEntrypointNumGpus":
+			if len(call.Args) > 0 {
+				updateEntrypointParam(call.Args[0], spec.RayEntrypointNumGpus, "EntrypointNumGpus")
+			}
+		}
+	}
+}
+
+// updateEntrypointParam updates entrypoint parameter values
+func updateEntrypointParam(arg ast.Expr, newValue, paramName string) {
+	// Skip if newValue is empty (no change desired)
+	if newValue == "" || newValue == `""` {
+		return
+	}
+
+	// Remove quotes from newValue for numeric comparison
+	numericNewValue := strings.Trim(newValue, `"`)
+
+	if lit, ok := arg.(*ast.BasicLit); ok && lit.Kind == token.INT {
+		// Skip if values already match
+		if lit.Value == numericNewValue {
+			return
+		}
+		fmt.Printf("  Updating %s: %s -> %s\n", paramName, lit.Value, numericNewValue)
+		lit.Value = numericNewValue
+	}
 }
