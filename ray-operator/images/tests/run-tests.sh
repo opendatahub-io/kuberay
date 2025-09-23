@@ -74,4 +74,4 @@ else
 fi
 
 # Run tests with junit XML output
-gotestsum --format standard-verbose --junitfile results/xunit_report.xml --junitfile-testsuite-name short --junitfile-testcase-classname relative -- -run "$TEST_RUN_REGEX" ./test/e2erayjob -p 1 -parallel 1 "${EXTRA_ARGS[@]}"
+gotestsum --format standard-verbose --junitfile results/xunit_report.xml --junitfile-testsuite-name short --junitfile-testcase-classname relative -- -timeout 30m -run "$TEST_RUN_REGEX" ./test/e2erayjob -p 1 -parallel 1 "${EXTRA_ARGS[@]}"
