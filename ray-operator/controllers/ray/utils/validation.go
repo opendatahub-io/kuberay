@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
+	"github.com/ray-project/kuberay/ray-operator/controllers/ray/utils/dashboardclient"
 	"github.com/ray-project/kuberay/ray-operator/pkg/features"
 )
 
@@ -133,17 +134,17 @@ func ValidateRayClusterSpec(spec *rayv1.RayClusterSpec, annotations map[string]s
 
 func ValidateRayJobStatus(rayJob *rayv1.RayJob) error {
 	if rayJob.Status.JobDeploymentStatus == rayv1.JobDeploymentStatusWaiting && rayJob.Spec.SubmissionMode != rayv1.InteractiveMode {
-		return fmt.Errorf("invalid RayJob State: JobDeploymentStatus cannot be `Waiting` when SubmissionMode is not InteractiveMode")
+		return fmt.Errorf("The RayJob status is invalid: JobDeploymentStatus cannot be `Waiting` when SubmissionMode is not InteractiveMode")
 	}
 	return nil
 }
 
 func ValidateRayJobMetadata(metadata metav1.ObjectMeta) error {
 	if len(metadata.Name) > MaxRayJobNameLength {
-		return fmt.Errorf("RayJob name should be no more than %d characters", MaxRayJobNameLength)
+		return fmt.Errorf("The RayJob metadata is invalid: RayJob name should be no more than %d characters", MaxRayJobNameLength)
 	}
 	if errs := validation.IsDNS1035Label(metadata.Name); len(errs) > 0 {
-		return fmt.Errorf("RayJob name should be a valid DNS1035 label: %v", errs)
+		return fmt.Errorf("The RayJob metadata is invalid: RayJob name should be a valid DNS1035 label: %v", errs)
 	}
 	return nil
 }
@@ -153,24 +154,34 @@ func ValidateRayJobSpec(rayJob *rayv1.RayJob) error {
 	// Kueue (https://kueue.sigs.k8s.io/docs/tasks/run_rayjobs/#c-limitations). For example, KubeRay allows users
 	// to suspend a RayJob with autoscaling enabled, but Kueue doesn't.
 	if rayJob.Spec.Suspend && !rayJob.Spec.ShutdownAfterJobFinishes {
-		return fmt.Errorf("a RayJob with shutdownAfterJobFinishes set to false is not allowed to be suspended")
+		return fmt.Errorf("The RayJob spec is invalid: a RayJob with shutdownAfterJobFinishes set to false is not allowed to be suspended")
 	}
 
 	if rayJob.Spec.TTLSecondsAfterFinished < 0 {
-		return fmt.Errorf("TTLSecondsAfterFinished must be a non-negative integer")
+		return fmt.Errorf("The RayJob spec is invalid: TTLSecondsAfterFinished must be a non-negative integer")
 	}
 
 	if !rayJob.Spec.ShutdownAfterJobFinishes && rayJob.Spec.TTLSecondsAfterFinished > 0 {
-		return fmt.Errorf("a RayJob with shutdownAfterJobFinishes set to false cannot have TTLSecondsAfterFinished")
+		return fmt.Errorf("The RayJob spec is invalid: a RayJob with shutdownAfterJobFinishes set to false cannot have TTLSecondsAfterFinished")
 	}
 
 	isClusterSelectorMode := len(rayJob.Spec.ClusterSelector) != 0
 	if rayJob.Spec.Suspend && isClusterSelectorMode {
-		return fmt.Errorf("the ClusterSelector mode doesn't support the suspend operation")
+		return fmt.Errorf("The RayJob spec is invalid: the ClusterSelector mode doesn't support the suspend operation")
 	}
 	if rayJob.Spec.RayClusterSpec == nil && !isClusterSelectorMode {
-		return fmt.Errorf("one of RayClusterSpec or ClusterSelector must be set")
+		return fmt.Errorf("The RayJob spec is invalid: one of RayClusterSpec or ClusterSelector must be set")
 	}
+	if isClusterSelectorMode {
+		clusterName := rayJob.Spec.ClusterSelector[RayJobClusterSelectorKey]
+		if len(clusterName) == 0 {
+			return fmt.Errorf("cluster name in ClusterSelector should not be empty")
+		}
+		if rayJob.Spec.SubmissionMode == rayv1.SidecarMode {
+			return fmt.Errorf("ClusterSelector is not supported in SidecarMode")
+		}
+	}
+
 	// InteractiveMode does not support backoffLimit > 1.
 	// When a RayJob fails (e.g., due to a missing script) and retries,
 	// spec.JobId remains set, causing the new job to incorrectly transition
@@ -179,28 +190,42 @@ func ValidateRayJobSpec(rayJob *rayv1.RayJob) error {
 	// to avoid ambiguous state handling and unintended behavior.
 	// https://github.com/ray-project/kuberay/issues/3525
 	if rayJob.Spec.SubmissionMode == rayv1.InteractiveMode && rayJob.Spec.BackoffLimit != nil && *rayJob.Spec.BackoffLimit > 0 {
-		return fmt.Errorf("BackoffLimit is incompatible with InteractiveMode")
+		return fmt.Errorf("The RayJob spec is invalid: BackoffLimit is incompatible with InteractiveMode")
+	}
+
+	if rayJob.Spec.SubmissionMode == rayv1.SidecarMode {
+		if rayJob.Spec.SubmitterPodTemplate != nil {
+			return fmt.Errorf("Currently, SidecarMode doesn't support SubmitterPodTemplate")
+		}
+
+		if rayJob.Spec.SubmitterConfig != nil {
+			return fmt.Errorf("Currently, SidecarMode doesn't support SubmitterConfig")
+		}
+
+		if rayJob.Spec.RayClusterSpec.HeadGroupSpec.Template.Spec.RestartPolicy != "" && rayJob.Spec.RayClusterSpec.HeadGroupSpec.Template.Spec.RestartPolicy != corev1.RestartPolicyNever {
+			return fmt.Errorf("restartPolicy for head Pod should be Never or unset when using SidecarMode")
+		}
 	}
 
 	if rayJob.Spec.RayClusterSpec != nil {
 		if err := ValidateRayClusterSpec(rayJob.Spec.RayClusterSpec, rayJob.Annotations); err != nil {
-			return err
+			return fmt.Errorf("The RayJob spec is invalid: %w", err)
 		}
 	}
 
 	// Validate whether RuntimeEnvYAML is a valid YAML string. Note that this only checks its validity
 	// as a YAML string, not its adherence to the runtime environment schema.
-	if _, err := UnmarshalRuntimeEnvYAML(rayJob.Spec.RuntimeEnvYAML); err != nil {
+	if _, err := dashboardclient.UnmarshalRuntimeEnvYAML(rayJob.Spec.RuntimeEnvYAML); err != nil {
 		return err
 	}
 	if rayJob.Spec.ActiveDeadlineSeconds != nil && *rayJob.Spec.ActiveDeadlineSeconds <= 0 {
-		return fmt.Errorf("activeDeadlineSeconds must be a positive integer")
+		return fmt.Errorf("The RayJob spec is invalid: activeDeadlineSeconds must be a positive integer")
 	}
 	if rayJob.Spec.BackoffLimit != nil && *rayJob.Spec.BackoffLimit < 0 {
-		return fmt.Errorf("backoffLimit must be a positive integer")
+		return fmt.Errorf("The RayJob spec is invalid: backoffLimit must be a positive integer")
 	}
 	if !features.Enabled(features.RayJobDeletionPolicy) && rayJob.Spec.DeletionStrategy != nil {
-		return fmt.Errorf("RayJobDeletionPolicy feature gate must be enabled to use the DeletionStrategy feature")
+		return fmt.Errorf("The RayJob spec is invalid: RayJobDeletionPolicy feature gate must be enabled to use the DeletionStrategy feature")
 	}
 
 	if rayJob.Spec.DeletionStrategy != nil {
@@ -208,35 +233,35 @@ func ValidateRayJobSpec(rayJob *rayv1.RayJob) error {
 		onFailurePolicy := rayJob.Spec.DeletionStrategy.OnFailure
 
 		if onSuccessPolicy.Policy == nil {
-			return fmt.Errorf("the DeletionPolicyType field of DeletionStrategy.OnSuccess cannot be unset when DeletionStrategy is enabled")
+			return fmt.Errorf("The RayJob spec is invalid: the DeletionPolicyType field of DeletionStrategy.OnSuccess cannot be unset when DeletionStrategy is enabled")
 		}
 		if onFailurePolicy.Policy == nil {
-			return fmt.Errorf("the DeletionPolicyType field of DeletionStrategy.OnFailure cannot be unset when DeletionStrategy is enabled")
+			return fmt.Errorf("The RayJob spec is invalid: the DeletionPolicyType field of DeletionStrategy.OnFailure cannot be unset when DeletionStrategy is enabled")
 		}
 
 		if isClusterSelectorMode {
 			switch *onSuccessPolicy.Policy {
 			case rayv1.DeleteCluster:
-				return fmt.Errorf("the ClusterSelector mode doesn't support DeletionStrategy=DeleteCluster on success")
+				return fmt.Errorf("The RayJob spec is invalid: the ClusterSelector mode doesn't support DeletionStrategy=DeleteCluster on success")
 			case rayv1.DeleteWorkers:
-				return fmt.Errorf("the ClusterSelector mode doesn't support DeletionStrategy=DeleteWorkers on success")
+				return fmt.Errorf("The RayJob spec is invalid: the ClusterSelector mode doesn't support DeletionStrategy=DeleteWorkers on success")
 			}
 
 			switch *onFailurePolicy.Policy {
 			case rayv1.DeleteCluster:
-				return fmt.Errorf("the ClusterSelector mode doesn't support DeletionStrategy=DeleteCluster on failure")
+				return fmt.Errorf("The RayJob spec is invalid: the ClusterSelector mode doesn't support DeletionStrategy=DeleteCluster on failure")
 			case rayv1.DeleteWorkers:
-				return fmt.Errorf("the ClusterSelector mode doesn't support DeletionStrategy=DeleteWorkers on failure")
+				return fmt.Errorf("The RayJob spec is invalid: the ClusterSelector mode doesn't support DeletionStrategy=DeleteWorkers on failure")
 			}
 		}
 
 		if (*onSuccessPolicy.Policy == rayv1.DeleteWorkers || *onFailurePolicy.Policy == rayv1.DeleteWorkers) && IsAutoscalingEnabled(rayJob.Spec.RayClusterSpec) {
 			// TODO (rueian): This can be supported in a future Ray version. We should check the RayVersion once we know it.
-			return fmt.Errorf("DeletionStrategy=DeleteWorkers currently does not support RayCluster with autoscaling enabled")
+			return fmt.Errorf("The RayJob spec is invalid: DeletionStrategy=DeleteWorkers currently does not support RayCluster with autoscaling enabled")
 		}
 
 		if rayJob.Spec.ShutdownAfterJobFinishes && (*onSuccessPolicy.Policy == rayv1.DeleteNone || *onFailurePolicy.Policy == rayv1.DeleteNone) {
-			return fmt.Errorf("shutdownAfterJobFinshes is set to 'true' while deletion policy is 'DeleteNone'")
+			return fmt.Errorf("The RayJob spec is invalid: shutdownAfterJobFinshes is set to 'true' while deletion policy is 'DeleteNone'")
 		}
 	}
 	return nil

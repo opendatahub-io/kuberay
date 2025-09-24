@@ -45,15 +45,16 @@ func IsJobTerminal(status JobStatus) bool {
 type JobDeploymentStatus string
 
 const (
-	JobDeploymentStatusNew          JobDeploymentStatus = ""
-	JobDeploymentStatusInitializing JobDeploymentStatus = "Initializing"
-	JobDeploymentStatusRunning      JobDeploymentStatus = "Running"
-	JobDeploymentStatusComplete     JobDeploymentStatus = "Complete"
-	JobDeploymentStatusFailed       JobDeploymentStatus = "Failed"
-	JobDeploymentStatusSuspending   JobDeploymentStatus = "Suspending"
-	JobDeploymentStatusSuspended    JobDeploymentStatus = "Suspended"
-	JobDeploymentStatusRetrying     JobDeploymentStatus = "Retrying"
-	JobDeploymentStatusWaiting      JobDeploymentStatus = "Waiting"
+	JobDeploymentStatusNew              JobDeploymentStatus = ""
+	JobDeploymentStatusInitializing     JobDeploymentStatus = "Initializing"
+	JobDeploymentStatusRunning          JobDeploymentStatus = "Running"
+	JobDeploymentStatusComplete         JobDeploymentStatus = "Complete"
+	JobDeploymentStatusFailed           JobDeploymentStatus = "Failed"
+	JobDeploymentStatusValidationFailed JobDeploymentStatus = "ValidationFailed"
+	JobDeploymentStatusSuspending       JobDeploymentStatus = "Suspending"
+	JobDeploymentStatusSuspended        JobDeploymentStatus = "Suspended"
+	JobDeploymentStatusRetrying         JobDeploymentStatus = "Retrying"
+	JobDeploymentStatusWaiting          JobDeploymentStatus = "Waiting"
 )
 
 // IsJobDeploymentTerminal returns true if the given JobDeploymentStatus
@@ -74,6 +75,7 @@ const (
 	DeadlineExceeded                                 JobFailedReason = "DeadlineExceeded"
 	AppFailed                                        JobFailedReason = "AppFailed"
 	JobDeploymentStatusTransitionGracePeriodExceeded JobFailedReason = "JobDeploymentStatusTransitionGracePeriodExceeded"
+	ValidationFailed                                 JobFailedReason = "ValidationFailed"
 )
 
 type JobSubmissionMode string
@@ -82,6 +84,7 @@ const (
 	K8sJobMode      JobSubmissionMode = "K8sJobMode"      // Submit job via Kubernetes Job
 	HTTPMode        JobSubmissionMode = "HTTPMode"        // Submit job via HTTP request
 	InteractiveMode JobSubmissionMode = "InteractiveMode" // Don't submit job in KubeRay. Instead, wait for user to submit job and provide the job submission ID.
+	SidecarMode     JobSubmissionMode = "SidecarMode"     // Submit job via a sidecar container in the Ray head Pod
 )
 
 type DeletionPolicyType string
@@ -174,6 +177,7 @@ type RayJobSpec struct {
 	// In "K8sJobMode", the KubeRay operator creates a submitter Kubernetes Job to submit the Ray job.
 	// In "HTTPMode", the KubeRay operator sends a request to the RayCluster to create a Ray job.
 	// In "InteractiveMode", the KubeRay operator waits for a user to submit a job to the Ray cluster.
+	// In "SidecarMode", the KubeRay operator injects a container into the Ray head Pod that acts as the job submitter to submit the Ray job.
 	// +kubebuilder:default:=K8sJobMode
 	// +optional
 	SubmissionMode JobSubmissionMode `json:"submissionMode,omitempty"`
