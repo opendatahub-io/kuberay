@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - dev
-      - 'release-*'
   workflow_dispatch:
     inputs:
       E2E_TEST_IMAGE_VERSION:
