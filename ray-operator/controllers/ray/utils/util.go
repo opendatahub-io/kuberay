@@ -18,7 +18,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/util/rand"
-	"k8s.io/client-go/discovery"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
@@ -671,36 +670,10 @@ func GetRayClusterNameFromService(svc *corev1.Service) string {
 	return svc.Spec.Selector[RayClusterLabelKey]
 }
 
-// Check where we are running. We are trying to distinguish here whether
-// this is vanilla kubernetes cluster or Openshift
+// GetClusterType returns whether the cluster is OpenShift or not
+// Deprecated: Use IsOpenShiftCluster() instead
 func GetClusterType() bool {
-	if os.Getenv(USE_INGRESS_ON_OPENSHIFT) == "true" {
-		// Environment is set to treat OpenShift cluster as Vanilla Kubernetes
-		return false
-	}
-
-	// The discovery package is used to discover APIs supported by a Kubernetes API server.
-	config, err := ctrl.GetConfig()
-	if err != nil || config == nil {
-		return false
-	}
-
-	discoveryClient, err := discovery.NewDiscoveryClientForConfig(config)
-	if err != nil || discoveryClient == nil {
-		return false
-	}
-
-	apiGroupList, err := discoveryClient.ServerGroups()
-	if err != nil {
-		return false
-	}
-
-	for _, group := range apiGroupList.Groups {
-		if strings.HasSuffix(group.Name, ".openshift.io") {
-			return true
-		}
-	}
-	return false
+	return IsOpenShiftCluster()
 }
 
 func GetContainerCommand(additionalOptions []string) []string {

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 
-	routev1 "github.com/openshift/api/route/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -102,7 +101,7 @@ func (r *NetworkPolicyController) getKubeRayNamespaces(ctx context.Context) []st
 	logger := ctrl.LoggerFrom(ctx).WithName("networkpolicy-controller")
 
 	// On OpenShift, use stricter namespace detection
-	if r.isOpenShift() {
+	if utils.IsOpenShiftCluster() {
 		logger.V(1).Info("Detected OpenShift platform")
 
 		// 1. Check APPLICATION_NAMESPACE env var (set by ODH operator via params.env)
@@ -130,13 +129,6 @@ func (r *NetworkPolicyController) getKubeRayNamespaces(ctx context.Context) []st
 
 	logger.V(1).Info("Using default namespace", "namespace", "ray-system")
 	return []string{"ray-system"}
-}
-
-// isOpenShift checks if the cluster is running on OpenShift
-func (r *NetworkPolicyController) isOpenShift() bool {
-	gvk := routev1.GroupVersion.WithKind("Route")
-	_, err := r.RESTMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-	return err == nil
 }
 
 // createOrUpdateNetworkPolicy creates or updates a NetworkPolicy
