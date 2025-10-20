@@ -14,32 +14,28 @@ import (
 )
 
 func TestRayJobWithClusterSelector(t *testing.T) {
-	test := With(t)
-	g := NewWithT(t)
+	_ = WithParallel(t).WithConfigMaps("counter.py", "fail.py")
 
-	// Create a namespace
-	namespace := test.NewTestNamespace()
-
-	// Job scripts
-	jobsAC := newConfigMap(namespace.Name, files(test, "counter.py", "fail.py"))
-	jobs, err := test.Client().Core().CoreV1().ConfigMaps(namespace.Name).Apply(test.Ctx(), jobsAC, TestApplyOptions)
-	g.Expect(err).NotTo(HaveOccurred())
-	LogWithTimestamp(test.T(), "Created ConfigMap %s/%s successfully", jobs.Namespace, jobs.Name)
-
-	// RayCluster
-	rayClusterAC := rayv1ac.RayCluster("raycluster", namespace.Name).
-		WithSpec(newRayClusterSpec(mountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs")))
-
-	rayCluster, err := test.Client().Ray().RayV1().RayClusters(namespace.Name).Apply(test.Ctx(), rayClusterAC, TestApplyOptions)
-	g.Expect(err).NotTo(HaveOccurred())
-	LogWithTimestamp(test.T(), "Created RayCluster %s/%s successfully", rayCluster.Namespace, rayCluster.Name)
-
-	LogWithTimestamp(test.T(), "Waiting for RayCluster %s/%s to become ready", rayCluster.Namespace, rayCluster.Name)
-	g.Eventually(RayCluster(test, rayCluster.Namespace, rayCluster.Name), TestTimeoutMedium).
-		Should(WithTransform(RayClusterState, Equal(rayv1.Ready)))
-
-	test.T().Run("Successful RayJob", func(t *testing.T) {
+	t.Run("Successful RayJob", func(t *testing.T) {
 		t.Parallel()
+		subtest := WithParallel(t)
+		jobs := subtest.WithConfigMaps("counter.py", "fail.py")
+		g := subtest.Gomega()
+
+		// Create a namespace (ConfigMap will be created automatically)
+		namespace := subtest.WithNamespace()
+
+		// RayCluster
+		rayClusterAC := rayv1ac.RayCluster("raycluster", namespace.Name).
+			WithSpec(newRayClusterSpec(mountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs")))
+
+		rayCluster, err := subtest.Client().Ray().RayV1().RayClusters(namespace.Name).Apply(subtest.Ctx(), rayClusterAC, TestApplyOptions)
+		g.Expect(err).NotTo(HaveOccurred())
+		LogWithTimestamp(t, "Created RayCluster %s/%s successfully", rayCluster.Namespace, rayCluster.Name)
+
+		LogWithTimestamp(t, "Waiting for RayCluster %s/%s to become ready", rayCluster.Namespace, rayCluster.Name)
+		g.Eventually(RayCluster(subtest, rayCluster.Namespace, rayCluster.Name), TestTimeoutMedium).
+			Should(WithTransform(RayClusterState, Equal(rayv1.Ready)))
 
 		// RayJob
 		rayJobAC := rayv1ac.RayJob("counter", namespace.Name).
@@ -52,21 +48,39 @@ env_vars:
 `).
 				WithSubmitterPodTemplate(jobSubmitterPodTemplateApplyConfiguration()))
 
-		rayJob, err := test.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(test.Ctx(), rayJobAC, TestApplyOptions)
+		rayJob, err := subtest.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(subtest.Ctx(), rayJobAC, TestApplyOptions)
 		g.Expect(err).NotTo(HaveOccurred())
-		LogWithTimestamp(test.T(), "Created RayJob %s/%s successfully", rayJob.Namespace, rayJob.Name)
+		LogWithTimestamp(t, "Created RayJob %s/%s successfully", rayJob.Namespace, rayJob.Name)
 
-		LogWithTimestamp(test.T(), "Waiting for RayJob %s/%s to complete", rayJob.Namespace, rayJob.Name)
-		g.Eventually(RayJob(test, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
+		LogWithTimestamp(t, "Waiting for RayJob %s/%s to complete", rayJob.Namespace, rayJob.Name)
+		g.Eventually(RayJob(subtest, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
 			Should(WithTransform(RayJobStatus, Satisfy(rayv1.IsJobTerminal)))
 
 		// Assert the Ray job has completed successfully
-		g.Expect(GetRayJob(test, rayJob.Namespace, rayJob.Name)).
+		g.Expect(GetRayJob(subtest, rayJob.Namespace, rayJob.Name)).
 			To(WithTransform(RayJobStatus, Equal(rayv1.JobStatusSucceeded)))
 	})
 
-	test.T().Run("Failing RayJob", func(t *testing.T) {
+	t.Run("Failing RayJob", func(t *testing.T) {
 		t.Parallel()
+		subtest := WithParallel(t)
+		jobs := subtest.WithConfigMaps("counter.py", "fail.py")
+		g := subtest.Gomega()
+
+		// Create a namespace (ConfigMap will be created automatically)
+		namespace := subtest.WithNamespace()
+
+		// RayCluster
+		rayClusterAC := rayv1ac.RayCluster("raycluster", namespace.Name).
+			WithSpec(newRayClusterSpec(mountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs")))
+
+		rayCluster, err := subtest.Client().Ray().RayV1().RayClusters(namespace.Name).Apply(subtest.Ctx(), rayClusterAC, TestApplyOptions)
+		g.Expect(err).NotTo(HaveOccurred())
+		LogWithTimestamp(t, "Created RayCluster %s/%s successfully", rayCluster.Namespace, rayCluster.Name)
+
+		LogWithTimestamp(t, "Waiting for RayCluster %s/%s to become ready", rayCluster.Namespace, rayCluster.Name)
+		g.Eventually(RayCluster(subtest, rayCluster.Namespace, rayCluster.Name), TestTimeoutMedium).
+			Should(WithTransform(RayClusterState, Equal(rayv1.Ready)))
 
 		// RayJob
 		rayJobAC := rayv1ac.RayJob("fail", namespace.Name).
@@ -76,21 +90,39 @@ env_vars:
 				WithShutdownAfterJobFinishes(false).
 				WithSubmitterPodTemplate(jobSubmitterPodTemplateApplyConfiguration()))
 
-		rayJob, err := test.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(test.Ctx(), rayJobAC, TestApplyOptions)
+		rayJob, err := subtest.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(subtest.Ctx(), rayJobAC, TestApplyOptions)
 		g.Expect(err).NotTo(HaveOccurred())
-		LogWithTimestamp(test.T(), "Created RayJob %s/%s successfully", rayJob.Namespace, rayJob.Name)
+		LogWithTimestamp(t, "Created RayJob %s/%s successfully", rayJob.Namespace, rayJob.Name)
 
-		LogWithTimestamp(test.T(), "Waiting for RayJob %s/%s to complete", rayJob.Namespace, rayJob.Name)
-		g.Eventually(RayJob(test, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
+		LogWithTimestamp(t, "Waiting for RayJob %s/%s to complete", rayJob.Namespace, rayJob.Name)
+		g.Eventually(RayJob(subtest, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
 			Should(WithTransform(RayJobStatus, Satisfy(rayv1.IsJobTerminal)))
 
 		// Assert the Ray job has failed
-		g.Expect(GetRayJob(test, rayJob.Namespace, rayJob.Name)).
+		g.Expect(GetRayJob(subtest, rayJob.Namespace, rayJob.Name)).
 			To(WithTransform(RayJobStatus, Equal(rayv1.JobStatusFailed)))
 	})
 
-	test.T().Run("RayJob should be created but not to be updated when managed externally", func(_ *testing.T) {
+	t.Run("RayJob should be created but not to be updated when managed externally", func(t *testing.T) {
 		t.Parallel()
+		subtest := WithParallel(t)
+		jobs := subtest.WithConfigMaps("counter.py", "fail.py")
+		g := subtest.Gomega()
+
+		// Create a namespace (ConfigMap will be created automatically)
+		namespace := subtest.WithNamespace()
+
+		// RayCluster
+		rayClusterAC := rayv1ac.RayCluster("raycluster", namespace.Name).
+			WithSpec(newRayClusterSpec(mountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs")))
+
+		rayCluster, err := subtest.Client().Ray().RayV1().RayClusters(namespace.Name).Apply(subtest.Ctx(), rayClusterAC, TestApplyOptions)
+		g.Expect(err).NotTo(HaveOccurred())
+		LogWithTimestamp(t, "Created RayCluster %s/%s successfully", rayCluster.Namespace, rayCluster.Name)
+
+		LogWithTimestamp(t, "Waiting for RayCluster %s/%s to become ready", rayCluster.Namespace, rayCluster.Name)
+		g.Eventually(RayCluster(subtest, rayCluster.Namespace, rayCluster.Name), TestTimeoutMedium).
+			Should(WithTransform(RayClusterState, Equal(rayv1.Ready)))
 
 		// RayJob
 		rayJobAC := rayv1ac.RayJob("managed-externally", namespace.Name).
@@ -104,19 +136,41 @@ env_vars:
 				WithSubmitterPodTemplate(jobSubmitterPodTemplateApplyConfiguration()).
 				WithManagedBy("kueue.x-k8s.io/multikueue"))
 
-		rayJob, err := test.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(test.Ctx(), rayJobAC, TestApplyOptions)
+		rayJob, err := subtest.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(subtest.Ctx(), rayJobAC, TestApplyOptions)
 		g.Expect(err).NotTo(HaveOccurred())
-		LogWithTimestamp(test.T(), "Created RayJob %s/%s successfully", rayJob.Namespace, rayJob.Name)
+		LogWithTimestamp(t, "Created RayJob %s/%s successfully", rayJob.Namespace, rayJob.Name)
 
 		// Assert the Ray job status has not been updated
 		g.Consistently(func(gg Gomega) {
-			rayJob, err = GetRayJob(test, rayJob.Namespace, rayJob.Name)
+			var err2 error
+			rayJob, err2 = GetRayJob(subtest, rayJob.Namespace, rayJob.Name)
+			err = err2
 			gg.Expect(err).ToNot(HaveOccurred())
 			gg.Expect(rayJob.Status.JobDeploymentStatus).To(Equal(rayv1.JobDeploymentStatusNew))
 		}, time.Second*3, time.Millisecond*500).Should(Succeed())
 	})
 
-	test.T().Run("RayJob should not be created due to managedBy invalid value", func(_ *testing.T) {
+	t.Run("RayJob should not be created due to managedBy invalid value", func(t *testing.T) {
+		t.Parallel()
+		subtest := WithParallel(t)
+		jobs := subtest.WithConfigMaps("counter.py", "fail.py")
+		g := subtest.Gomega()
+
+		// Create a namespace (ConfigMap will be created automatically)
+		namespace := subtest.WithNamespace()
+
+		// RayCluster
+		rayClusterAC := rayv1ac.RayCluster("raycluster", namespace.Name).
+			WithSpec(newRayClusterSpec(mountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs")))
+
+		rayCluster, err := subtest.Client().Ray().RayV1().RayClusters(namespace.Name).Apply(subtest.Ctx(), rayClusterAC, TestApplyOptions)
+		g.Expect(err).NotTo(HaveOccurred())
+		LogWithTimestamp(t, "Created RayCluster %s/%s successfully", rayCluster.Namespace, rayCluster.Name)
+
+		LogWithTimestamp(t, "Waiting for RayCluster %s/%s to become ready", rayCluster.Namespace, rayCluster.Name)
+		g.Eventually(RayCluster(subtest, rayCluster.Namespace, rayCluster.Name), TestTimeoutMedium).
+			Should(WithTransform(RayClusterState, Equal(rayv1.Ready)))
+
 		// RayJob
 		rayJobAC := rayv1ac.RayJob("managed-externally-invalid", namespace.Name).
 			WithSpec(rayv1ac.RayJobSpec().
@@ -129,7 +183,9 @@ env_vars:
 				WithSubmitterPodTemplate(jobSubmitterPodTemplateApplyConfiguration()).
 				WithManagedBy("invalid.com/controller"))
 
-		_, err := test.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(test.Ctx(), rayJobAC, TestApplyOptions)
+		var err3 error
+		_, err3 = subtest.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(subtest.Ctx(), rayJobAC, TestApplyOptions)
+		err = err3
 		g.Expect(errors.IsInvalid(err)).To(BeTrue(), "error: %v", err)
 	})
 }

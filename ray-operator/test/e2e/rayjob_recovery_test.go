@@ -15,19 +15,17 @@ import (
 )
 
 func TestRayJobRecovery(t *testing.T) {
-	test := With(t)
-	g := NewWithT(t)
+	test, _ := WithParallel(t).WithConfigMaps("long_running_counter.py")
+	g := test.Gomega()
 
-	// Create a namespace
-	namespace := test.NewTestNamespace()
+	t.Run("RayJob should recover after pod deletion", func(t *testing.T) {
+		t.Parallel()
+		subtest, jobs := WithParallel(t).WithConfigMaps("long_running_counter.py")
+		g := subtest.Gomega()
 
-	// Job scripts
-	jobsAC := newConfigMap(namespace.Name, files(test, "long_running_counter.py"))
-	jobs, err := test.Client().Core().CoreV1().ConfigMaps(namespace.Name).Apply(test.Ctx(), jobsAC, TestApplyOptions)
-	g.Expect(err).NotTo(HaveOccurred())
-	LogWithTimestamp(test.T(), "Created ConfigMap %s/%s successfully", jobs.Namespace, jobs.Name)
+		// Create a namespace (ConfigMap will be created automatically)
+		namespace := subtest.NewTestNamespace()
 
-	test.T().Run("RayJob should recover after pod deletion", func(_ *testing.T) {
 		rayJobAC := rayv1ac.RayJob("counter", namespace.Name).
 			WithSpec(rayv1ac.RayJobSpec().
 				WithRayClusterSpec(newRayClusterSpec(mountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs"))).
@@ -39,20 +37,20 @@ env_vars:
 				WithShutdownAfterJobFinishes(true).
 				WithSubmitterPodTemplate(jobSubmitterPodTemplateApplyConfiguration()))
 
-		rayJob, err := test.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(test.Ctx(), rayJobAC, TestApplyOptions)
+		rayJob, err := subtest.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(subtest.Ctx(), rayJobAC, TestApplyOptions)
 		g.Expect(err).NotTo(HaveOccurred())
-		LogWithTimestamp(test.T(), "Created RayJob %s/%s successfully", rayJob.Namespace, rayJob.Name)
+		LogWithTimestamp(t, "Created RayJob %s/%s successfully", rayJob.Namespace, rayJob.Name)
 
-		LogWithTimestamp(test.T(), "Waiting for RayJob %s/%s to start running", rayJob.Namespace, rayJob.Name)
-		g.Eventually(RayJob(test, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
+		LogWithTimestamp(t, "Waiting for RayJob %s/%s to start running", rayJob.Namespace, rayJob.Name)
+		g.Eventually(RayJob(subtest, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
 			Should(WithTransform(RayJobStatus, Equal(rayv1.JobStatusRunning)))
-		LogWithTimestamp(test.T(), "Find RayJob %s/%s running", rayJob.Namespace, rayJob.Name)
+		LogWithTimestamp(t, "Find RayJob %s/%s running", rayJob.Namespace, rayJob.Name)
 		// wait for the job to run a bit
-		LogWithTimestamp(test.T(), "Sleep RayJob %s/%s 15 seconds", rayJob.Namespace, rayJob.Name)
+		LogWithTimestamp(t, "Sleep RayJob %s/%s 15 seconds", rayJob.Namespace, rayJob.Name)
 		time.Sleep(15 * time.Second)
 
 		// get the running jobpods
-		jobpods, err := test.Client().Core().CoreV1().Pods(namespace.Name).List(test.Ctx(), metav1.ListOptions{
+		jobpods, err := subtest.Client().Core().CoreV1().Pods(namespace.Name).List(subtest.Ctx(), metav1.ListOptions{
 			LabelSelector: fmt.Sprintf("job-name=%s", rayJob.Name),
 		})
 		g.Expect(err).NotTo(HaveOccurred())
@@ -60,17 +58,17 @@ env_vars:
 		// remove the running jobpods
 		propagationPolicy := metav1.DeletePropagationBackground
 		for _, pod := range jobpods.Items {
-			LogWithTimestamp(test.T(), "Delete Pod %s from namespace  %s", pod.Name, rayJob.Namespace)
-			err = test.Client().Core().CoreV1().Pods(namespace.Name).Delete(test.Ctx(), pod.Name, metav1.DeleteOptions{
+			LogWithTimestamp(t, "Delete Pod %s from namespace  %s", pod.Name, rayJob.Namespace)
+			err = subtest.Client().Core().CoreV1().Pods(namespace.Name).Delete(subtest.Ctx(), pod.Name, metav1.DeleteOptions{
 				PropagationPolicy: &propagationPolicy,
 			})
 			g.Expect(err).NotTo(HaveOccurred())
 		}
 
-		LogWithTimestamp(test.T(), "Waiting for new pod to be created and running for RayJob %s/%s", namespace.Name, rayJob.Name)
+		LogWithTimestamp(t, "Waiting for new pod to be created and running for RayJob %s/%s", namespace.Name, rayJob.Name)
 		g.Eventually(func() ([]corev1.Pod, error) {
-			pods, err := test.Client().Core().CoreV1().Pods(namespace.Name).List(
-				test.Ctx(),
+			pods, err := subtest.Client().Core().CoreV1().Pods(namespace.Name).List(
+				subtest.Ctx(),
 				metav1.ListOptions{
 					LabelSelector: fmt.Sprintf("job-name=%s", rayJob.Name),
 				},
@@ -86,7 +84,7 @@ env_vars:
 								continue
 							}
 						}
-						LogWithTimestamp(test.T(), "Found new running pod %s/%s", pod.Namespace, pod.Name)
+						LogWithTimestamp(t, "Found new running pod %s/%s", pod.Namespace, pod.Name)
 						return true
 					}
 				}
@@ -94,10 +92,10 @@ env_vars:
 			}, BeTrue()),
 		)
 
-		g.Eventually(RayJob(test, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
+		g.Eventually(RayJob(subtest, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
 			Should(WithTransform(RayJobStatus, Equal(rayv1.JobStatusSucceeded)))
 
-		g.Eventually(RayJob(test, namespace.Name, rayJob.Name), TestTimeoutMedium).
+		g.Eventually(RayJob(subtest, namespace.Name, rayJob.Name), TestTimeoutMedium).
 			Should(WithTransform(RayJobDeploymentStatus, Equal(rayv1.JobDeploymentStatusComplete)))
 	})
 }

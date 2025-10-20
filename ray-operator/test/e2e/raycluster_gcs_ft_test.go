@@ -23,17 +23,19 @@ const (
 )
 
 func TestRayClusterGCSFaultTolerance(t *testing.T) {
-	test := With(t)
-	g := NewWithT(t)
+	_ = WithParallel(t)
 
-	// Create a namespace
-	namespace := test.NewTestNamespace()
-	testScriptAC := newConfigMap(namespace.Name, files(test, "test_detached_actor_1.py", "test_detached_actor_2.py"))
-	testScript, err := test.Client().Core().CoreV1().ConfigMaps(namespace.Name).Apply(test.Ctx(), testScriptAC, TestApplyOptions)
-	g.Expect(err).NotTo(HaveOccurred())
+	// Create a namespace and ConfigMap
+	test := WithParallel(t)
+	namespace := test.WithNamespace()
+	_, testScript := test.WithConfigMaps("test_detached_actor_1.py", "test_detached_actor_2.py")
 
-	test.T().Run("Test Detached Actor", func(_ *testing.T) {
-		checkRedisDBSize := deployRedis(test, namespace.Name, redisPassword)
+	t.Run("Test Detached Actor", func(t *testing.T) {
+		t.Parallel()
+		subtest := WithParallel(t)
+		g := subtest.Gomega()
+
+		checkRedisDBSize := deployRedis(subtest, namespace.Name, redisPassword)
 		defer g.Eventually(checkRedisDBSize, time.Second*30, time.Second).Should(BeEquivalentTo("0"))
 
 		rayClusterSpecAC := rayv1ac.RayClusterSpec().
@@ -62,69 +64,69 @@ func TestRayClusterGCSFaultTolerance(t *testing.T) {
 		rayClusterAC := rayv1ac.RayCluster("raycluster-gcsft", namespace.Name).
 			WithSpec(apply(rayClusterSpecAC, mountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](testScript, "/home/ray/samples")))
 
-		rayCluster, err := test.Client().Ray().RayV1().RayClusters(namespace.Name).Apply(test.Ctx(), rayClusterAC, TestApplyOptions)
+		rayCluster, err := subtest.Client().Ray().RayV1().RayClusters(namespace.Name).Apply(subtest.Ctx(), rayClusterAC, TestApplyOptions)
 
 		g.Expect(err).NotTo(HaveOccurred())
-		LogWithTimestamp(test.T(), "Created RayCluster %s/%s successfully", rayCluster.Namespace, rayCluster.Name)
+		LogWithTimestamp(t, "Created RayCluster %s/%s successfully", rayCluster.Namespace, rayCluster.Name)
 
-		LogWithTimestamp(test.T(), "Waiting for RayCluster %s/%s to become ready", rayCluster.Namespace, rayCluster.Name)
-		g.Eventually(RayCluster(test, namespace.Name, rayCluster.Name), TestTimeoutLong).
+		LogWithTimestamp(t, "Waiting for RayCluster %s/%s to become ready", rayCluster.Namespace, rayCluster.Name)
+		g.Eventually(RayCluster(subtest, namespace.Name, rayCluster.Name), TestTimeoutLong).
 			Should(WithTransform(StatusCondition(rayv1.RayClusterProvisioned), MatchCondition(metav1.ConditionTrue, rayv1.AllPodRunningAndReadyFirstTime)))
 
-		headPod, err := GetHeadPod(test, rayCluster)
+		headPod, err := GetHeadPod(subtest, rayCluster)
 		g.Expect(err).NotTo(HaveOccurred())
 
-		LogWithTimestamp(test.T(), "HeadPod Name: %s", headPod.Name)
+		LogWithTimestamp(t, "HeadPod Name: %s", headPod.Name)
 
 		rayNamespace := "testing-ray-namespace"
-		LogWithTimestamp(test.T(), "Ray namespace: %s", rayNamespace)
+		LogWithTimestamp(t, "Ray namespace: %s", rayNamespace)
 
-		ExecPodCmd(test, headPod, common.RayHeadContainer, []string{"python", "samples/test_detached_actor_1.py", rayNamespace})
+		ExecPodCmd(subtest, headPod, common.RayHeadContainer, []string{"python", "samples/test_detached_actor_1.py", rayNamespace})
 
 		// [Test 1: Kill GCS process to "restart" the head Pod]
 		// Assertion is implement in python, so no furthur handling needed here, and so are other ExecPodCmd
-		stdout, stderr := ExecPodCmd(test, headPod, common.RayHeadContainer, []string{"pkill", "gcs_server"})
-		LogWithTimestamp(test.T(), "pkill gcs_server output - stdout: %s, stderr: %s", stdout.String(), stderr.String())
+		stdout, stderr := ExecPodCmd(subtest, headPod, common.RayHeadContainer, []string{"pkill", "gcs_server"})
+		LogWithTimestamp(t, "pkill gcs_server output - stdout: %s, stderr: %s", stdout.String(), stderr.String())
 
 		// Restart count should eventually become 1, not creating a new pod
 		HeadPodRestartCount := func(p *corev1.Pod) int32 { return p.Status.ContainerStatuses[0].RestartCount }
 		HeadPodContainerReady := func(p *corev1.Pod) bool { return p.Status.ContainerStatuses[0].Ready }
 
-		g.Eventually(HeadPod(test, rayCluster), TestTimeoutMedium).
+		g.Eventually(HeadPod(subtest, rayCluster), TestTimeoutMedium).
 			Should(WithTransform(HeadPodRestartCount, Equal(int32(1))))
-		g.Eventually(HeadPod(test, rayCluster), TestTimeoutMedium).
+		g.Eventually(HeadPod(subtest, rayCluster), TestTimeoutMedium).
 			Should(WithTransform(HeadPodContainerReady, Equal(true)))
 
 		// Pod Status should eventually become Running
 		PodState := func(p *corev1.Pod) string { return string(p.Status.Phase) }
-		g.Eventually(HeadPod(test, rayCluster)).
+		g.Eventually(HeadPod(subtest, rayCluster)).
 			Should(WithTransform(PodState, Equal("Running")))
 
-		headPod, err = GetHeadPod(test, rayCluster)
+		headPod, err = GetHeadPod(subtest, rayCluster)
 		g.Expect(err).NotTo(HaveOccurred())
 
 		expectedOutput := "3"
-		ExecPodCmd(test, headPod, common.RayHeadContainer, []string{"python", "samples/test_detached_actor_2.py", rayNamespace, expectedOutput})
+		ExecPodCmd(subtest, headPod, common.RayHeadContainer, []string{"python", "samples/test_detached_actor_2.py", rayNamespace, expectedOutput})
 
 		// Test 2: Delete the head Pod
-		err = test.Client().Core().CoreV1().Pods(namespace.Name).Delete(test.Ctx(), headPod.Name, metav1.DeleteOptions{})
+		err = subtest.Client().Core().CoreV1().Pods(namespace.Name).Delete(subtest.Ctx(), headPod.Name, metav1.DeleteOptions{})
 		g.Expect(err).NotTo(HaveOccurred())
 
 		PodUID := func(p *corev1.Pod) string { return string(p.UID) }
-		g.Eventually(HeadPod(test, rayCluster), TestTimeoutMedium).
+		g.Eventually(HeadPod(subtest, rayCluster), TestTimeoutMedium).
 			ShouldNot(WithTransform(PodUID, Equal(string(headPod.UID)))) // Use UID to check if the new head pod is created.
 
-		g.Eventually(HeadPod(test, rayCluster), TestTimeoutMedium).
+		g.Eventually(HeadPod(subtest, rayCluster), TestTimeoutMedium).
 			Should(WithTransform(PodState, Equal("Running")))
 
-		headPod, err = GetHeadPod(test, rayCluster) // Replace the old head pod
+		headPod, err = GetHeadPod(subtest, rayCluster) // Replace the old head pod
 		g.Expect(err).NotTo(HaveOccurred())
 
 		expectedOutput = "4"
 
-		ExecPodCmd(test, headPod, common.RayHeadContainer, []string{"python", "samples/test_detached_actor_2.py", rayNamespace, expectedOutput})
+		ExecPodCmd(subtest, headPod, common.RayHeadContainer, []string{"python", "samples/test_detached_actor_2.py", rayNamespace, expectedOutput})
 
-		err = test.Client().Ray().RayV1().RayClusters(namespace.Name).Delete(test.Ctx(), rayCluster.Name, metav1.DeleteOptions{})
+		err = subtest.Client().Ray().RayV1().RayClusters(namespace.Name).Delete(subtest.Ctx(), rayCluster.Name, metav1.DeleteOptions{})
 		g.Expect(err).NotTo(HaveOccurred())
 	})
 }
@@ -218,16 +220,18 @@ func TestGcsFaultToleranceOptions(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
+		tc := tc // Capture range variable
 		t.Run(tc.name, func(t *testing.T) {
-			test := With(t)
-			g := NewWithT(t)
-			namespace := test.NewTestNamespace()
+			t.Parallel()
+			test := WithParallel(t)
+			g := test.Gomega()
+			namespace := test.WithNamespace()
 
 			checkRedisDBSize := deployRedis(test, namespace.Name, tc.redisPassword)
 			defer g.Eventually(checkRedisDBSize, time.Second*30, time.Second).Should(BeEquivalentTo("0"))
 
 			if tc.createSecret {
-				LogWithTimestamp(test.T(), "Creating Redis password secret")
+				LogWithTimestamp(t, "Creating Redis password secret")
 				_, err := test.Client().Core().CoreV1().Secrets(namespace.Name).Apply(
 					test.Ctx(),
 					corev1ac.Secret("redis-password-secret", namespace.Name).
@@ -240,13 +244,13 @@ func TestGcsFaultToleranceOptions(t *testing.T) {
 			rayClusterAC := tc.rayClusterFn(namespace.Name)
 			rayCluster, err := test.Client().Ray().RayV1().RayClusters(namespace.Name).Apply(test.Ctx(), rayClusterAC, TestApplyOptions)
 			g.Expect(err).NotTo(HaveOccurred())
-			LogWithTimestamp(test.T(), "Created RayCluster %s/%s successfully", rayCluster.Namespace, rayCluster.Name)
+			LogWithTimestamp(t, "Created RayCluster %s/%s successfully", rayCluster.Namespace, rayCluster.Name)
 
-			LogWithTimestamp(test.T(), "Waiting for RayCluster %s/%s to become ready", rayCluster.Namespace, rayCluster.Name)
+			LogWithTimestamp(t, "Waiting for RayCluster %s/%s to become ready", rayCluster.Namespace, rayCluster.Name)
 			g.Eventually(RayCluster(test, namespace.Name, rayCluster.Name), TestTimeoutMedium).
 				Should(WithTransform(StatusCondition(rayv1.RayClusterProvisioned), MatchCondition(metav1.ConditionTrue, rayv1.AllPodRunningAndReadyFirstTime)))
 
-			LogWithTimestamp(test.T(), "Verifying environment variables on Head Pod")
+			LogWithTimestamp(t, "Verifying environment variables on Head Pod")
 			rayCluster, err = test.Client().Ray().RayV1().RayClusters(namespace.Name).Get(test.Ctx(), rayCluster.Name, metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
 			headPod, err := test.Client().Core().CoreV1().Pods(namespace.Name).Get(test.Ctx(), rayCluster.Status.Head.PodName, metav1.GetOptions{})
@@ -300,10 +304,12 @@ func TestGcsFaultToleranceAnnotations(t *testing.T) {
 	}
 
 	for _, tc := range tests {
+		tc := tc // Capture range variable
 		t.Run(tc.name, func(t *testing.T) {
-			test := With(t)
-			g := NewWithT(t)
-			namespace := test.NewTestNamespace()
+			t.Parallel()
+			test := WithParallel(t)
+			g := test.Gomega()
+			namespace := test.WithNamespace()
 
 			redisPassword := ""
 			require.False(t, tc.redisPasswordEnv != "" && tc.redisPasswordInRayStartParams != "" && tc.redisPasswordInRayStartParams != "$REDIS_PASSWORD", "redisPasswordEnv and redisPasswordInRayStartParams are both set")
@@ -350,13 +356,13 @@ func TestGcsFaultToleranceAnnotations(t *testing.T) {
 			// Apply RayCluster
 			rayCluster, err := test.Client().Ray().RayV1().RayClusters(namespace.Name).Apply(test.Ctx(), rayClusterAC, TestApplyOptions)
 			g.Expect(err).NotTo(HaveOccurred())
-			LogWithTimestamp(test.T(), "Created RayCluster %s/%s successfully", rayCluster.Namespace, rayCluster.Name)
+			LogWithTimestamp(t, "Created RayCluster %s/%s successfully", rayCluster.Namespace, rayCluster.Name)
 
-			LogWithTimestamp(test.T(), "Waiting for RayCluster %s/%s to become ready", rayCluster.Namespace, rayCluster.Name)
+			LogWithTimestamp(t, "Waiting for RayCluster %s/%s to become ready", rayCluster.Namespace, rayCluster.Name)
 			g.Eventually(RayCluster(test, namespace.Name, rayCluster.Name), TestTimeoutMedium).
 				Should(WithTransform(StatusCondition(rayv1.RayClusterProvisioned), MatchCondition(metav1.ConditionTrue, rayv1.AllPodRunningAndReadyFirstTime)))
 
-			LogWithTimestamp(test.T(), "Verifying environment variables on Head Pod")
+			LogWithTimestamp(t, "Verifying environment variables on Head Pod")
 			rayCluster, err = test.Client().Ray().RayV1().RayClusters(namespace.Name).Get(test.Ctx(), rayCluster.Name, metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
 			headPod, err := test.Client().Core().CoreV1().Pods(namespace.Name).Get(test.Ctx(), rayCluster.Status.Head.PodName, metav1.GetOptions{})
