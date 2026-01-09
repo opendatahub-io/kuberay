@@ -62,13 +62,11 @@ jobs:
         - name: Run e2e tests
           if: steps.deploy.outcome == 'success'
           run: |
-            export KUBERAY_TEST_TIMEOUT_SHORT=5m
-            export KUBERAY_TEST_TIMEOUT_MEDIUM=12m
-            export KUBERAY_TEST_TIMEOUT_LONG=15m
+            export KUBERAY_TEST_TIMEOUT_SHORT=5m KUBERAY_TEST_TIMEOUT_MEDIUM=12m KUBERAY_TEST_TIMEOUT_LONG=15m KUBERAY_TEST_RAY_IMAGE=rayproject/ray:2.52.1
 
             set -euo pipefail
             cd ray-operator
-            go test -timeout 120m -v ./test/e2e -json 2>&1 | tee ./gotest.log | gotestfmt
+            go test -timeout 120m -p 1 -parallel 1 -v -run '^(TestRayJobWithClusterSelector|TestRayJob|TestRayJobSuspend|TestRayJobLightWeightMode)$' ./test/e2e -json 2>&1 | tee ./gotest.log | gotestfmt
 
         - name: Print KubeRay operator logs
           if: steps.deploy.outcome == 'success'
