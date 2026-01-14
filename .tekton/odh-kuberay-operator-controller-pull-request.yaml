@@ -2,67 +2,51 @@ apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
   annotations:
-    build.appstudio.openshift.io/repo: https://github.com/red-hat-data-services/kuberay?rev={{revision}}
+    build.appstudio.openshift.io/repo: https://github.com/opendatahub-io/kuberay?rev={{revision}}
     build.appstudio.redhat.com/commit_sha: '{{revision}}'
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
-    build.appstudio.redhat.com/pull_request_number: "{{pull_request_number}}"
+    build.appstudio.redhat.com/pull_request_number: '{{pull_request_number}}'
+    pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
-    pipelinesascode.tekton.dev/on-comment: "^/build-konflux"
-    pipelinesascode.tekton.dev/on-event: "[pull_request]"
-    pipelinesascode.tekton.dev/cancel-in-progress: "true"
+    pipelinesascode.tekton.dev/on-cel-expression: event == "pull_request" && target_branch
+      == "stable"
+  creationTimestamp: null
   labels:
-    appstudio.openshift.io/application: automation
-    appstudio.openshift.io/component: pull-request-pipelines-odh-kuberay-operator-controller
+    appstudio.openshift.io/application: opendatahub-builds
+    appstudio.openshift.io/component: odh-kuberay-operator-controller
     pipelines.appstudio.openshift.io/type: build
   name: odh-kuberay-operator-controller-on-pull-request
-  namespace: rhoai-tenant
+  namespace: open-data-hub-tenant
 spec:
   params:
   - name: git-url
     value: '{{source_url}}'
   - name: revision
     value: '{{revision}}'
-  - name: additional-tags
-    value:
-    - 'pr-{{pull_request_number}}-into-{{target_branch}}'
-  - name: additional-labels
-    value:
-    - version=on-pr-{{revision}}
-    - io.openshift.tags=odh-kuberay-operator-controller
   - name: output-image
-    value: quay.io/rhoai/pull-request-pipelines:odh-kuberay-operator-controller-{{revision}}
+    value: quay.io/opendatahub/kuberay-operator:{{revision}}
   - name: dockerfile
-    value: ./ray-operator/Dockerfile.konflux
+    value: Dockerfile.rhoai
   - name: path-context
     value: ray-operator
-  - name: hermetic
-    value: true
-  - name: prefetch-input
-    value: |
-      [{"type": "gomod", "path": "ray-operator"}]
-  - name: build-source-image
-    value: true
-  - name: build-image-index
-    value: true
-  - name: build-platforms
+  - name: additional-tags
     value:
-    - linux/x86_64
-    - linux-m2xlarge/arm64
-  - name: image-expires-after
-    value: 5d
-  - name: enable-slack-failure-notification
-    value: "false"
+    - '{{target_branch}}-{{revision}}'
+    - 'odh-pr' 
+    - 'odh-pr-{{revision}}'
+  - name: pipeline-type
+    value: pull-request
   pipelineRef:
     resolver: git
     params:
     - name: url
-      value: https://github.com/red-hat-data-services/konflux-central.git
+      value: https://github.com/opendatahub-io/odh-konflux-central.git
     - name: revision
-      value: '{{ target_branch }}'
+      value: main
     - name: pathInRepo
-      value: pipelines/multi-arch-container-build.yaml
+      value: pipeline/multi-arch-container-build.yaml
   taskRunTemplate:
-    serviceAccountName: build-pipeline-pull-request-pipelines
+    serviceAccountName: build-pipeline-odh-kuberay-operator-controller
   workspaces:
   - name: git-auth
     secret:
