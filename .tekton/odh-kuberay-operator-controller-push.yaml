@@ -12,7 +12,7 @@ metadata:
   creationTimestamp: null
   labels:
     appstudio.openshift.io/application: opendatahub-builds
-    appstudio.openshift.io/component: odh-kuberay-operator-controller-ci
+    appstudio.openshift.io/component: odh-kuberay-operator-controller
     pipelines.appstudio.openshift.io/type: build
   name: odh-kuberay-operator-controller-on-push
   namespace: open-data-hub-tenant
@@ -23,7 +23,7 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/opendatahub/kuberay-operator:odh-stable 
+    value: quay.io/opendatahub/kuberay-operator:odh-stable
   - name: dockerfile
     value: Dockerfile.rhoai
   - name: path-context
