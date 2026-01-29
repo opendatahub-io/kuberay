@@ -1,0 +1,320 @@
+# Full SDK-generated RayCluster with CodeFlare operator TLS/OAuth injections
+# This is the most comprehensive test case simulating a real RHOAI 2.x cluster
+#
+# Created with codeflare-sdk v0.31.x + codeflare-operator TLS/OAuth injections
+#
+# After migration:
+# - CodeFlare injections (create-cert, oauth-proxy, TLS env vars, etc.) -> REMOVED
+# - SDK configurations (machine-learning container, ODH CA, lifecycle, etc.) -> PRESERVED
+# - Custom user configs (envs, volumes, annotations) -> PRESERVED
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: raycluster-sdk-full-codeflare
+  namespace: test-migration
+  labels:
+    controller-tools.k8s.io: "1.0"
+    kueue.x-k8s.io/queue-name: user-queue
+    custom-label: custom-value
+  annotations:
+    app.kubernetes.io/managed-by: /user/notebook-name
+    custom-annotation: custom-value
+  finalizers:
+  - ray.openshift.ai/oauth-finalizer  # CodeFlare finalizer triggers migration
+spec:
+  rayVersion: '2.47.1'
+  enableInTreeAutoscaling: false
+  autoscalerOptions:
+    upscalingMode: Default
+    idleTimeoutSeconds: 60
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 500m
+        memory: 512Mi
+  headGroupSpec:
+    serviceType: ClusterIP
+    enableIngress: true  # Set by CodeFlare - SHOULD BE SET TO FALSE
+    rayStartParams:
+      dashboard-host: '0.0.0.0'
+      block: 'true'
+      num-gpus: '1'
+      resources: '"{\"GPU\": 1}"'
+    template:
+      metadata:
+        annotations:
+          app.kubernetes.io/managed-by: /user/notebook-name
+          custom-annotation: custom-value
+      spec:
+        serviceAccountName: raycluster-sdk-full-codeflare-oauth-proxy  # CodeFlare SA - SHOULD BE CLEARED
+        tolerations:
+        # User tolerations - SHOULD BE PRESERVED
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+        imagePullSecrets:
+        - name: user-pull-secret
+        initContainers:
+        # CodeFlare TLS init container - SHOULD BE REMOVED
+        - name: create-cert
+          image: quay.io/modh/ray@sha256:6d076aeb38ab3c34a6a2ef0f58dc667089aa15826fa08a73273c629333e12f1e
+          command: ["/bin/sh", "-c", "openssl genrsa -out /etc/server/tls/tls.key 2048 && ..."]
+          env:
+          - name: MY_POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          volumeMounts:
+          - name: ca-vol
+            mountPath: /etc/ca/tls
+            readOnly: true
+          - name: server-cert
+            mountPath: /etc/server/tls
+        containers:
+        - name: ray-head
+          image: quay.io/modh/ray@sha256:6d076aeb38ab3c34a6a2ef0f58dc667089aa15826fa08a73273c629333e12f1e
+          imagePullPolicy: Always
+          ports:
+          - containerPort: 6379
+            name: gcs
+          - containerPort: 8265
+            name: dashboard
+          - containerPort: 10001
+            name: client
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                - /bin/sh
+                - -c
+                - ray stop
+          env:
+          # CodeFlare TLS env vars - SHOULD BE REMOVED
+          - name: MY_POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          - name: RAY_USE_TLS
+            value: "1"
+          - name: RAY_TLS_SERVER_CERT
+            value: "/etc/server/tls/tls.crt"
+          - name: RAY_TLS_SERVER_KEY
+            value: "/etc/server/tls/tls.key"
+          - name: RAY_TLS_CA_CERT
+            value: "/etc/ca/tls/ca.crt"
+          # SDK/User env vars - SHOULD BE PRESERVED
+          - name: RAY_USAGE_STATS_ENABLED
+            value: "0"
+          - name: MY_CUSTOM_ENV
+            value: "my-custom-value"
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                name: aws-creds
+                key: access-key-id
+          resources:
+            limits:
+              cpu: 2
+              memory: 8G
+              nvidia.com/gpu: 1
+            requests:
+              cpu: 1
+              memory: 5G
+              nvidia.com/gpu: 1
+          volumeMounts:
+          # CodeFlare TLS mounts - SHOULD BE REMOVED
+          - name: ca-vol
+            mountPath: /etc/ca/tls
+            readOnly: true
+          - name: server-cert
+            mountPath: /etc/server/tls
+          # ODH CA mounts - SHOULD BE PRESERVED
+          - mountPath: /etc/pki/tls/certs/odh-trusted-ca-bundle.crt
+            name: odh-trusted-ca-cert
+            subPath: odh-trusted-ca-bundle.crt
+          - mountPath: /etc/ssl/certs/odh-trusted-ca-bundle.crt
+            name: odh-trusted-ca-cert
+            subPath: odh-trusted-ca-bundle.crt
+          - mountPath: /etc/pki/tls/certs/odh-ca-bundle.crt
+            name: odh-ca-cert
+            subPath: odh-ca-bundle.crt
+          - mountPath: /etc/ssl/certs/odh-ca-bundle.crt
+            name: odh-ca-cert
+            subPath: odh-ca-bundle.crt
+          # User custom mounts - SHOULD BE PRESERVED
+          - mountPath: /data
+            name: user-data
+        # CodeFlare OAuth proxy sidecar - SHOULD BE REMOVED
+        - name: oauth-proxy
+          image: registry.redhat.io/openshift4/ose-oauth-proxy:v4.12
+          args:
+          - --https-address=:8443
+          - --provider=openshift
+          - --upstream=http://localhost:8265
+          - --tls-cert=/etc/tls/private/tls.crt
+          - --tls-key=/etc/tls/private/tls.key
+          - --cookie-secret-file=/etc/tls/private/cookie-secret
+          ports:
+          - containerPort: 8443
+            name: oauth-proxy
+          volumeMounts:
+          - name: proxy-tls-secret
+            mountPath: /etc/tls/private
+        volumes:
+        # CodeFlare TLS volumes - SHOULD BE REMOVED
+        - name: ca-vol
+          secret:
+            secretName: raycluster-sdk-full-codeflare-ca-secret-abcde
+        - name: server-cert
+          emptyDir: {}
+        - name: proxy-tls-secret
+          secret:
+            secretName: raycluster-sdk-full-codeflare-proxy-tls-secret
+        # ODH CA volumes - SHOULD BE PRESERVED
+        - name: odh-trusted-ca-cert
+          configMap:
+            name: odh-trusted-ca-bundle
+            items:
+            - key: ca-bundle.crt
+              path: odh-trusted-ca-bundle.crt
+            optional: true
+        - name: odh-ca-cert
+          configMap:
+            name: odh-trusted-ca-bundle
+            items:
+            - key: odh-ca-bundle.crt
+              path: odh-ca-bundle.crt
+            optional: true
+        # User custom volumes - SHOULD BE PRESERVED
+        - name: user-data
+          persistentVolumeClaim:
+            claimName: user-data-pvc
+  workerGroupSpecs:
+  - replicas: 2
+    minReplicas: 2
+    maxReplicas: 2
+    groupName: small-group-raycluster-sdk-full-codeflare
+    rayStartParams:
+      block: 'true'
+      num-gpus: '2'
+      resources: '"{\"GPU\": 2}"'
+    template:
+      metadata:
+        annotations:
+          app.kubernetes.io/managed-by: /user/notebook-name
+          custom-annotation: custom-value
+      spec:
+        serviceAccountName: raycluster-sdk-full-codeflare-oauth-proxy-abcde  # CodeFlare SA - SHOULD BE CLEARED
+        tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+        imagePullSecrets:
+        - name: user-pull-secret
+        initContainers:
+        # CodeFlare TLS init container - SHOULD BE REMOVED
+        - name: create-cert
+          image: quay.io/modh/ray@sha256:6d076aeb38ab3c34a6a2ef0f58dc667089aa15826fa08a73273c629333e12f1e
+          command: ["/bin/sh", "-c", "openssl genrsa -out /etc/server/tls/tls.key 2048 && ..."]
+          env:
+          - name: MY_POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          volumeMounts:
+          - name: ca-vol
+            mountPath: /etc/ca/tls
+            readOnly: true
+          - name: server-cert
+            mountPath: /etc/server/tls
+        containers:
+        # SDK uses "machine-learning" for worker - SHOULD BE PRESERVED
+        - name: machine-learning
+          image: quay.io/modh/ray@sha256:6d076aeb38ab3c34a6a2ef0f58dc667089aa15826fa08a73273c629333e12f1e
+          imagePullPolicy: Always
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                - /bin/sh
+                - -c
+                - ray stop
+          env:
+          # CodeFlare TLS env vars - SHOULD BE REMOVED
+          - name: MY_POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          - name: RAY_USE_TLS
+            value: "1"
+          - name: RAY_TLS_SERVER_CERT
+            value: "/etc/server/tls/tls.crt"
+          - name: RAY_TLS_SERVER_KEY
+            value: "/etc/server/tls/tls.key"
+          - name: RAY_TLS_CA_CERT
+            value: "/etc/ca/tls/ca.crt"
+          # SDK/User env vars - SHOULD BE PRESERVED
+          - name: RAY_USAGE_STATS_ENABLED
+            value: "0"
+          - name: MY_CUSTOM_ENV
+            value: "my-custom-value"
+          resources:
+            limits:
+              cpu: 1
+              memory: 6G
+              nvidia.com/gpu: 2
+            requests:
+              cpu: 1
+              memory: 3G
+              nvidia.com/gpu: 2
+          volumeMounts:
+          # CodeFlare TLS mounts - SHOULD BE REMOVED
+          - name: ca-vol
+            mountPath: /etc/ca/tls
+            readOnly: true
+          - name: server-cert
+            mountPath: /etc/server/tls
+          # ODH CA mounts - SHOULD BE PRESERVED
+          - mountPath: /etc/pki/tls/certs/odh-trusted-ca-bundle.crt
+            name: odh-trusted-ca-cert
+            subPath: odh-trusted-ca-bundle.crt
+          - mountPath: /etc/ssl/certs/odh-trusted-ca-bundle.crt
+            name: odh-trusted-ca-cert
+            subPath: odh-trusted-ca-bundle.crt
+          - mountPath: /etc/pki/tls/certs/odh-ca-bundle.crt
+            name: odh-ca-cert
+            subPath: odh-ca-bundle.crt
+          - mountPath: /etc/ssl/certs/odh-ca-bundle.crt
+            name: odh-ca-cert
+            subPath: odh-ca-bundle.crt
+          # User custom mounts - SHOULD BE PRESERVED
+          - mountPath: /data
+            name: user-data
+        volumes:
+        # CodeFlare TLS volumes - SHOULD BE REMOVED
+        - name: ca-vol
+          secret:
+            secretName: raycluster-sdk-full-codeflare-ca-secret-abcde
+        - name: server-cert
+          emptyDir: {}
+        # ODH CA volumes - SHOULD BE PRESERVED
+        - name: odh-trusted-ca-cert
+          configMap:
+            name: odh-trusted-ca-bundle
+            items:
+            - key: ca-bundle.crt
+              path: odh-trusted-ca-bundle.crt
+            optional: true
+        - name: odh-ca-cert
+          configMap:
+            name: odh-trusted-ca-bundle
+            items:
+            - key: odh-ca-bundle.crt
+              path: odh-ca-bundle.crt
+            optional: true
+        # User custom volumes - SHOULD BE PRESERVED
+        - name: user-data
+          persistentVolumeClaim:
+            claimName: user-data-pvc

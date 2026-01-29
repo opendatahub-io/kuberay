@@ -1,0 +1,103 @@
+# RayCluster with custom sidecar containers that should be PRESERVED after migration
+# The migration should only remove "oauth-proxy" sidecar, not these custom ones
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: raycluster-custom-sidecar
+  namespace: test-migration
+spec:
+  rayVersion: '2.46.0'
+  headGroupSpec:
+    rayStartParams:
+      dashboard-host: '0.0.0.0'
+    template:
+      spec:
+        containers:
+        - name: ray-head
+          image: rayproject/ray:2.46.0
+          ports:
+          - containerPort: 6379
+            name: gcs
+          - containerPort: 8265
+            name: dashboard
+          volumeMounts:
+          - mountPath: /tmp/ray
+            name: ray-logs
+          resources:
+            limits:
+              cpu: "1"
+              memory: "2G"
+            requests:
+              cpu: "500m"
+              memory: "2G"
+        # Custom FluentBit sidecar - SHOULD BE PRESERVED
+        - name: fluentbit
+          image: fluent/fluent-bit:3.2.2
+          env:
+          - name: POD_LABELS
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.labels['ray.io/cluster']
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+          - mountPath: /tmp/ray
+            name: ray-logs
+          - mountPath: /fluent-bit/etc/fluent-bit.conf
+            subPath: fluent-bit.conf
+            name: fluentbit-config
+        # Custom metrics exporter sidecar - SHOULD BE PRESERVED
+        - name: metrics-exporter
+          image: prom/pushgateway:v1.4.0
+          ports:
+          - containerPort: 9091
+            name: metrics
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+        volumes:
+        - name: ray-logs
+          emptyDir: {}
+        - name: fluentbit-config
+          configMap:
+            name: fluentbit-config
+  workerGroupSpecs:
+  - replicas: 1
+    minReplicas: 1
+    maxReplicas: 5
+    groupName: worker-group
+    rayStartParams: {}
+    template:
+      spec:
+        containers:
+        - name: ray-worker
+          image: rayproject/ray:2.46.0
+          volumeMounts:
+          - mountPath: /tmp/ray
+            name: ray-logs
+          resources:
+            limits:
+              cpu: "1"
+              memory: "1G"
+            requests:
+              cpu: "500m"
+              memory: "1G"
+        # Custom worker sidecar - SHOULD BE PRESERVED
+        - name: log-collector
+          image: busybox:latest
+          command: ['sh', '-c', 'tail -f /tmp/ray/session_latest/logs/*.log || sleep infinity']
+          volumeMounts:
+          - mountPath: /tmp/ray
+            name: ray-logs
+        volumes:
+        - name: ray-logs
+          emptyDir: {}

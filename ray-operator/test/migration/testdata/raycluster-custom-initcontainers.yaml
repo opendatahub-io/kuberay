@@ -1,0 +1,70 @@
+# RayCluster with custom initContainers that should be PRESERVED after migration
+# The migration should only remove "create-cert" initContainer, not these custom ones
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: raycluster-custom-initcontainers
+  namespace: test-migration
+spec:
+  rayVersion: '2.46.0'
+  headGroupSpec:
+    rayStartParams:
+      dashboard-host: '0.0.0.0'
+    template:
+      spec:
+        initContainers:
+        # Custom init container for data preparation - SHOULD BE PRESERVED
+        - name: data-prep
+          image: busybox:latest
+          command: ['sh', '-c', 'echo "Preparing data..." && sleep 2']
+          volumeMounts:
+          - name: shared-data
+            mountPath: /data
+        # Custom init container for config setup - SHOULD BE PRESERVED
+        - name: config-setup
+          image: busybox:latest
+          command: ['sh', '-c', 'echo "Setting up config..." && sleep 1']
+        containers:
+        - name: ray-head
+          image: rayproject/ray:2.46.0
+          ports:
+          - containerPort: 6379
+            name: gcs
+          - containerPort: 8265
+            name: dashboard
+          volumeMounts:
+          - name: shared-data
+            mountPath: /data
+          resources:
+            limits:
+              cpu: "1"
+              memory: "2G"
+            requests:
+              cpu: "500m"
+              memory: "2G"
+        volumes:
+        - name: shared-data
+          emptyDir: {}
+  workerGroupSpecs:
+  - replicas: 1
+    minReplicas: 1
+    maxReplicas: 5
+    groupName: worker-group
+    rayStartParams: {}
+    template:
+      spec:
+        initContainers:
+        # Custom worker init container - SHOULD BE PRESERVED
+        - name: worker-init
+          image: busybox:latest
+          command: ['sh', '-c', 'echo "Initializing worker..." && sleep 1']
+        containers:
+        - name: ray-worker
+          image: rayproject/ray:2.46.0
+          resources:
+            limits:
+              cpu: "1"
+              memory: "1G"
+            requests:
+              cpu: "500m"
+              memory: "1G"
