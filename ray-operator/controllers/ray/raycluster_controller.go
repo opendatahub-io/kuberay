@@ -123,6 +123,7 @@ type RayClusterReconcilerOptions struct {
 // +kubebuilder:rbac:groups=core,resources=serviceaccounts,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="rbac.authorization.k8s.io",resources=roles,verbs=get;list;watch;create;delete;update
 // +kubebuilder:rbac:groups="rbac.authorization.k8s.io",resources=rolebindings,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups="rbac.authorization.k8s.io",resources=clusterrolebindings,verbs=get;list;watch;delete
 
 // [WARNING]: There MUST be a newline after kubebuilder markers.
 
@@ -1566,6 +1567,12 @@ func cleanCodeFlareInjections(instance *rayv1.RayCluster) {
 		"oauth-proxy": true,
 	}
 
+	// InitContainer names to remove (CodeFlare cert generation)
+	// From codeflare-operator/pkg/controllers/raycluster_webhook.go: initContainerName = "create-cert"
+	initContainersToRemove := map[string]bool{
+		"create-cert": true,
+	}
+
 	// Helper to clean a single container
 	cleanContainer := func(container *corev1.Container) {
 		// Remove TLS environment variables
@@ -1591,8 +1598,24 @@ func cleanCodeFlareInjections(instance *rayv1.RayCluster) {
 		}
 	}
 
+	// isCodeFlareServiceAccount checks if the service account name matches CodeFlare's pattern
+	// CodeFlare sets ServiceAccountName to either:
+	// - "{cluster-name}-oauth-proxy" (old naming)
+	// - "{cluster-name}-oauth-proxy-{hash}" (new naming with RCCUniqueName)
+	// We check if it contains "-oauth-proxy" to match both patterns
+	isCodeFlareServiceAccount := func(saName, clusterName string) bool {
+		if saName == "" {
+			return false
+		}
+		// Check for the CodeFlare OAuth proxy service account pattern
+		// Old format: {clusterName}-oauth-proxy
+		// New format: {clusterName}-oauth-proxy-{hash}
+		expectedPrefix := clusterName + "-oauth-proxy"
+		return strings.HasPrefix(saName, expectedPrefix)
+	}
+
 	// Helper to clean a pod spec
-	cleanPodSpec := func(podSpec *corev1.PodSpec) {
+	cleanPodSpec := func(podSpec *corev1.PodSpec, clusterName string) {
 		// Remove sidecar containers (oauth-proxy)
 		if podSpec.Containers != nil {
 			newContainers := []corev1.Container{}
@@ -1605,11 +1628,21 @@ func cleanCodeFlareInjections(instance *rayv1.RayCluster) {
 			podSpec.Containers = newContainers
 		}
 
-		// Remove all initContainers (cert generation)
-		podSpec.InitContainers = nil
+		// Remove only CodeFlare-managed initContainers (create-cert), preserve others
+		if podSpec.InitContainers != nil {
+			newInitContainers := []corev1.Container{}
+			for _, initContainer := range podSpec.InitContainers {
+				if !initContainersToRemove[initContainer.Name] {
+					newInitContainers = append(newInitContainers, initContainer)
+				}
+			}
+			podSpec.InitContainers = newInitContainers
+		}
 
-		// Remove serviceAccountName
-		podSpec.ServiceAccountName = ""
+		// Only clear serviceAccountName if it matches CodeFlare's OAuth proxy pattern
+		if isCodeFlareServiceAccount(podSpec.ServiceAccountName, clusterName) {
+			podSpec.ServiceAccountName = ""
+		}
 
 		// Remove TLS/OAuth volumes
 		if podSpec.Volumes != nil {
@@ -1625,7 +1658,7 @@ func cleanCodeFlareInjections(instance *rayv1.RayCluster) {
 
 	// Clean head group spec
 	if instance.Spec.HeadGroupSpec.Template.Spec.Containers != nil {
-		cleanPodSpec(&instance.Spec.HeadGroupSpec.Template.Spec)
+		cleanPodSpec(&instance.Spec.HeadGroupSpec.Template.Spec, instance.Name)
 	}
 
 	// Disable enableIngress if it was set to true by CodeFlare
@@ -1637,7 +1670,7 @@ func cleanCodeFlareInjections(instance *rayv1.RayCluster) {
 	// Clean worker group specs
 	for i := range instance.Spec.WorkerGroupSpecs {
 		if instance.Spec.WorkerGroupSpecs[i].Template.Spec.Containers != nil {
-			cleanPodSpec(&instance.Spec.WorkerGroupSpecs[i].Template.Spec)
+			cleanPodSpec(&instance.Spec.WorkerGroupSpecs[i].Template.Spec, instance.Name)
 		}
 	}
 }
