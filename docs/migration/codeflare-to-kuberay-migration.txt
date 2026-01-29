@@ -38,77 +38,77 @@ Its presence indicates the cluster needs migration.
                          NO                   YES
                           |                    |
                           v                    v
-              +-------------------+    +---------------------------+
-              | Skip Migration    |    | START MIGRATION           |
-              | Continue Normal   |    +---------------------------+
-              | Reconcile         |                |
-              +-------------------+                v
-                                   +--------------------------------+
-                                   | 1. Clean Pod Specs             |
-                                   |    - Remove TLS env vars       |
-                                   |    - Remove oauth-proxy        |
-                                   |    - Remove volumes/mounts     |
-                                   |    - Remove initContainers     |
-                                   |    - Clear serviceAccountName  |
-                                   +--------------------------------+
-                                                   |
-                                                   v
-                                   +--------------------------------+
-                                   | 2. Add Annotation              |
-                                   |    odh.ray.io/secure-trusted-  |
-                                   |    network: "true"             |
-                                   +--------------------------------+
-                                                   |
-                                                   v
-                                   +--------------------------------+
-                                   | 3. Backup CA Secret            |
-                                   |    ca-secret-{cluster} ->      |
-                                   |    ca-secret-{cluster}-backup  |
-                                   +--------------------------------+
-                                                   |
-                                                   v
-                                   +--------------------------------+
-                                   | 4. Delete Old NetworkPolicies  |
-                                   |    - {cluster}-head            |
-                                   |    - {cluster}-workers         |
-                                   +--------------------------------+
-                                                   |
-                                                   v
-                                   +--------------------------------+
-                                   | 5. Delete Old CA Secret        |
-                                   +--------------------------------+
-                                                   |
-                                                   v
-                                   +--------------------------------+
-                                   | 6. Delete OAuth Resources      |
-                                   |    (by label lookup)           |
-                                   |    - Services                  |
-                                   |    - Secrets                   |
-                                   |    - ServiceAccounts           |
-                                   |    - ClusterRoleBindings       |
-                                   |    - Routes (OpenShift)        |
-                                   +--------------------------------+
-                                                   |
-                                                   v
-                                   +--------------------------------+
-                                   | 7. Remove CodeFlare Finalizer  |
-                                   +--------------------------------+
-                                                   |
-                                                   v
-                                   +--------------------------------+
-                                   | 8. Update RayCluster CR        |
-                                   |    (single atomic update)      |
-                                   +--------------------------------+
-                                          |               |
-                                      SUCCESS          CONFLICT
-                                          |             ERROR
-                                          v               |
-                              +-------------------+       |
-                              | Migration         |       v
-                              | Complete!         |   +----------+
-                              | Event: Migration  |   | Requeue  |
-                              | Complete          |   | Retry    |
-                              +-------------------+   +----------+
+              +-------------------+    +-------------------------------+
+              | Skip Migration    |    | Suspended for Migration?      |
+              | Continue Normal   |    +-------------------------------+
+              | Reconcile         |          |                    |
+              +-------------------+         NO                   YES
+                                            |                    |
+                                            v                    v
+                                   +=================+   +=================+
+                                   |    PHASE 1      |   |    PHASE 2      |
+                                   | Cleanup & Suspend|   | Complete & Unsuspend
+                                   +=================+   +=================+
+                                            |                    |
+                                            v                    v
+                                   +----------------+    +----------------+
+                                   | 1. Clean Pod   |    | All Pods       |
+                                   |    Specs       |    | Terminated?    |
+                                   +----------------+    +----------------+
+                                            |                 |        |
+                                            v                NO       YES
+                                   +----------------+         |        |
+                                   | 2. Add secure- |         v        v
+                                   |    trusted-    |    +--------+ +--------+
+                                   |    network     |    | Wait,  | | Remove |
+                                   |    annotation  |    | Requeue| | Finlzr |
+                                   +----------------+    +--------+ +--------+
+                                            |                          |
+                                            v                          v
+                                   +----------------+          +--------+
+                                   | 3. Backup CA   |          | Set    |
+                                   |    Secret      |          |Suspend |
+                                   +----------------+          | =FALSE |
+                                            |                  +--------+
+                                            v                          |
+                                   +----------------+                  v
+                                   | 4. Delete Old  |          +--------+
+                                   |  NetworkPolicies          | Update |
+                                   +----------------+          |   CR   |
+                                            |                  +--------+
+                                            v                          |
+                                   +----------------+                  v
+                                   | 5. Delete Old  |          +-------------+
+                                   |    CA Secret   |          | MIGRATION   |
+                                   +----------------+          | COMPLETE!   |
+                                            |                  | Pods will be|
+                                            v                  | recreated   |
+                                   +----------------+          +-------------+
+                                   | 6. Delete OAuth|
+                                   |    Resources   |
+                                   +----------------+
+                                            |
+                                            v
+                                   +================+
+                                   | 7. SET SUSPEND |
+                                   |    = TRUE      |
+                                   | Mark migration |
+                                   | in-progress    |
+                                   +================+
+                                            |
+                                            v
+                                   +----------------+
+                                   | 8. Update CR   |
+                                   | (keep finalizr)|
+                                   +----------------+
+                                            |
+                                            v
+                                   +----------------+
+                                   | Requeue -      |
+                                   | Pods will be   |
+                                   | deleted by     |
+                                   | reconcilePods  |
+                                   +----------------+
 
 
 ================================================================================
@@ -180,6 +180,95 @@ WHY THIS WORKS:
 3. Single Update - Migration makes all changes in-memory, persists with one call
 4. Conflict recovery - If Update() fails, error causes requeue; next cycle retries
 5. Clean handoff - After finalizer removed, other controllers proceed normally
+
+
+================================================================================
+                    POD RESTART AND DATA RETENTION
+================================================================================
+
+WHY CLUSTER IS SUSPENDED (TWO-PHASE APPROACH)
+---------------------------------------------
+The migration uses a TWO-PHASE SUSPEND/UNSUSPEND approach to ensure
+consistent certificate rotation.
+
+CodeFlare and KubeRay use DIFFERENT Certificate Authorities for mTLS:
+- CodeFlare: Self-signed CA created by codeflare-operator
+- KubeRay: Cert-manager CA created by RayClusterMTLSController
+
+A rolling restart would cause certificate incompatibility:
+
+    Timeline WITHOUT suspend (PROBLEMATIC):
+    ─────────────────────────────────────────────────────────────────
+    T0: All pods have CodeFlare TLS (CA-A certificates)
+    T1: Head pod recreated with KubeRay TLS (CA-B certificates)
+    T2: Workers still have CA-A certificates
+        ❌ HEAD (CA-B) cannot communicate with WORKERS (CA-A)
+    T3: Workers recreated with CA-B
+    T4: All pods have CA-B - cluster healthy
+    ─────────────────────────────────────────────────────────────────
+        Window T1-T3: CLUSTER BROKEN (mixed certificates)
+
+By suspending the cluster:
+1. PHASE 1: All pods are gracefully terminated (standard K8s lifecycle)
+2. PHASE 2: After all pods are gone, cluster is unsuspended
+3. All pods are recreated simultaneously with the new CA
+
+This approach:
+- Uses standard Kubernetes/KubeRay suspend mechanism
+- Graceful termination (respects terminationGracePeriodSeconds)
+- Clear state transition (suspended -> unsuspended)
+- No mixed certificate window
+
+
+WHAT GETS LOST ON POD RESTART
+-----------------------------
+Data Type              Lost?      How to Preserve
+---------------------  ---------  ----------------------------------------
+In-memory object       YES        Use external storage (S3, GCS, MinIO)
+Actor state            YES        Use actor checkpointing
+Running tasks          YES        Use task retries (max_retries)
+GCS metadata           NO*        Enable GCS Fault Tolerance
+Submitted jobs         NO*        Enable GCS Fault Tolerance
+Cluster configuration  NO         Stored in RayCluster CR
+
+* With GCS Fault Tolerance enabled
+
+
+RECOMMENDED: Enable GCS Fault Tolerance BEFORE Migration
+--------------------------------------------------------
+For production clusters, enable GCS Fault Tolerance with Redis BEFORE upgrading:
+
+    apiVersion: ray.io/v1
+    kind: RayCluster
+    metadata:
+      name: my-cluster
+      annotations:
+        ray.io/ft-enabled: "true"
+    spec:
+      headGroupSpec:
+        rayStartParams:
+          redis-address: "redis:6379"     # External Redis for GCS storage
+          redis-password: "your-password"  # If using auth
+
+With GCS FT enabled:
+- Cluster metadata survives pod restarts
+- Job definitions are preserved
+- Actor placement groups are preserved
+- Workers automatically reconnect after head restart
+
+
+MIGRATION EVENTS
+----------------
+The migration emits Kubernetes events to inform users:
+
+Event                   Type      Phase   Message
+----------------------  --------  -----   ----------------------------------------
+MigrationStarted        Normal    1       Starting migration. Cluster will be
+                                          temporarily suspended.
+MigrationSuspending     Warning   1       Suspending cluster for certificate
+                                          rotation. Enable GCS FT to preserve state.
+MigrationComplete       Normal    2       Successfully migrated. Cluster unsuspended,
+                                          pods will be recreated.
 
 
 ================================================================================

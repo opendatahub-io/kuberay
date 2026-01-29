@@ -1642,9 +1642,23 @@ func cleanCodeFlareInjections(instance *rayv1.RayCluster) {
 	}
 }
 
-// migrateFromCodeFlare performs a one-time migration from CodeFlare operator management
-// This function only executes when the CodeFlare finalizer is present on the CR.
-// After updating the CR, the finalizer is removed and this function never runs again.
+// MigrationSuspendAnnotation is used to track that the cluster was suspended for migration
+const MigrationSuspendAnnotation = "migration.ray.io/suspended-for-migration"
+
+// migrateFromCodeFlare performs a one-time migration from CodeFlare operator management.
+// This uses a two-phase suspend/unsuspend approach:
+//
+// Phase 1: When finalizer present AND cluster NOT suspended:
+//   - Clean pod specs, add annotations, cleanup old resources
+//   - Set suspend=true to gracefully stop all pods
+//   - Update CR and return (pods will be deleted by reconcilePods)
+//
+// Phase 2: When finalizer present AND cluster IS suspended AND no pods running:
+//   - Remove CodeFlare finalizer
+//   - Set suspend=false to allow pod recreation
+//   - Update CR (migration complete)
+//
+// This approach ensures all pods are recreated with consistent certificates.
 func (r *RayClusterReconciler) migrateFromCodeFlare(ctx context.Context, instance *rayv1.RayCluster) error {
 	logger := ctrl.LoggerFrom(ctx).WithName("codeflare-migration")
 
@@ -1662,13 +1676,27 @@ func (r *RayClusterReconciler) migrateFromCodeFlare(ctx context.Context, instanc
 		return nil
 	}
 
-	logger.Info("CodeFlare finalizer detected - performing one-time migration",
+	// Check if we're in Phase 2 (cluster is suspended for migration)
+	isSuspendedForMigration := instance.Annotations != nil &&
+		instance.Annotations[MigrationSuspendAnnotation] == "true"
+
+	if isSuspendedForMigration {
+		return r.migrateFromCodeFlarePhase2(ctx, instance, logger)
+	}
+
+	// Phase 1: Initial migration - cleanup and suspend
+	return r.migrateFromCodeFlarePhase1(ctx, instance, logger)
+}
+
+// migrateFromCodeFlarePhase1 performs the initial migration steps and suspends the cluster.
+func (r *RayClusterReconciler) migrateFromCodeFlarePhase1(ctx context.Context, instance *rayv1.RayCluster, logger logr.Logger) error {
+	logger.Info("Phase 1: CodeFlare finalizer detected - performing migration cleanup and suspending cluster",
 		"cluster", instance.Name,
 		"namespace", instance.Namespace)
 
 	// Record migration start event
 	r.Recorder.Event(instance, corev1.EventTypeNormal, "MigrationStarted",
-		"Starting migration from CodeFlare operator to KubeRay management")
+		"Starting migration from CodeFlare operator to KubeRay management. Cluster will be temporarily suspended.")
 
 	// Step 1: Remove CodeFlare-injected TLS/OAuth components from pod specs
 	cleanCodeFlareInjections(instance)
@@ -1737,6 +1765,82 @@ func (r *RayClusterReconciler) migrateFromCodeFlare(ctx context.Context, instanc
 	}
 
 	// Step 6: Delete old CodeFlare OAuth-related resources by label
+	r.cleanupCodeFlareOAuthResources(ctx, instance, logger)
+
+	// Step 7: Suspend the cluster to gracefully stop all pods
+	// This ensures all pods are deleted before being recreated with new certificates
+	logger.Info("Suspending cluster for certificate rotation")
+	r.Recorder.Event(instance, corev1.EventTypeWarning, "MigrationSuspending",
+		"Suspending cluster for certificate rotation. Enable GCS Fault Tolerance with Redis to preserve cluster state.")
+
+	instance.Spec.Suspend = ptr.To(true)
+	instance.Annotations[MigrationSuspendAnnotation] = "true"
+
+	// Step 8: Update the CR to persist changes (but keep finalizer for Phase 2)
+	if err := r.Update(ctx, instance); err != nil {
+		logger.Error(err, "Failed to update RayCluster for migration Phase 1")
+		return fmt.Errorf("failed to update RayCluster for migration: %w", err)
+	}
+
+	logger.Info("Phase 1 complete - cluster suspended, waiting for pods to terminate")
+	// Return nil to allow reconcilePods to delete the pods
+	// Next reconcile will enter Phase 2 once pods are gone
+	return nil
+}
+
+// migrateFromCodeFlarePhase2 completes the migration by unsuspending the cluster.
+func (r *RayClusterReconciler) migrateFromCodeFlarePhase2(ctx context.Context, instance *rayv1.RayCluster, logger logr.Logger) error {
+	logger.Info("Phase 2: Checking if pods are terminated before completing migration",
+		"cluster", instance.Name)
+
+	// Check if all pods are gone
+	pods := corev1.PodList{}
+	if err := r.List(ctx, &pods, common.RayClusterAllPodsAssociationOptions(instance).ToListOptions()...); err != nil {
+		logger.Error(err, "Failed to list pods")
+		return fmt.Errorf("failed to list pods: %w", err)
+	}
+
+	if len(pods.Items) > 0 {
+		logger.Info("Waiting for pods to terminate before completing migration",
+			"remainingPods", len(pods.Items))
+		// Pods still exist, wait for them to be deleted
+		// The reconcilePods function will delete them because suspend=true
+		return nil
+	}
+
+	// All pods are gone, complete the migration
+	logger.Info("All pods terminated - completing migration")
+
+	// Remove the CodeFlare finalizer
+	newFinalizers := []string{}
+	for _, f := range instance.Finalizers {
+		if f != CodeFlareOperatorFinalizer {
+			newFinalizers = append(newFinalizers, f)
+		}
+	}
+	instance.Finalizers = newFinalizers
+
+	// Unsuspend the cluster to allow pod recreation with new certificates
+	instance.Spec.Suspend = ptr.To(false)
+
+	// Remove the migration tracking annotation
+	delete(instance.Annotations, MigrationSuspendAnnotation)
+
+	// Update the CR
+	if err := r.Update(ctx, instance); err != nil {
+		logger.Error(err, "Failed to complete migration Phase 2")
+		return fmt.Errorf("failed to complete migration: %w", err)
+	}
+
+	logger.Info("Migration complete - cluster unsuspended, pods will be recreated with new certificates")
+	r.Recorder.Event(instance, corev1.EventTypeNormal, "MigrationComplete",
+		"Successfully migrated from CodeFlare operator. MTLS and NetworkPolicy now managed by KubeRay. Cluster unsuspended, pods will be recreated.")
+
+	return nil
+}
+
+// cleanupCodeFlareOAuthResources deletes OAuth-related resources created by CodeFlare operator.
+func (r *RayClusterReconciler) cleanupCodeFlareOAuthResources(ctx context.Context, instance *rayv1.RayCluster, logger logr.Logger) {
 	// CodeFlare creates resources with label: ray.openshift.ai/cluster-name
 	codeflareLabels := client.MatchingLabels{
 		"ray.openshift.ai/cluster-name": instance.Name,
@@ -1818,31 +1922,6 @@ func (r *RayClusterReconciler) migrateFromCodeFlare(ctx context.Context, instanc
 			}
 		}
 	}
-
-	// Step 7: Update the CR to persist changes and remove CodeFlare finalizer
-	logger.Info("Updating RayCluster to remove CodeFlare finalizer")
-
-	// Remove the CodeFlare finalizer
-	newFinalizers := []string{}
-	for _, f := range instance.Finalizers {
-		if f != CodeFlareOperatorFinalizer {
-			newFinalizers = append(newFinalizers, f)
-		}
-	}
-	instance.Finalizers = newFinalizers
-
-	// Update the CR - this removes the finalizer and persists all changes
-	if err := r.Update(ctx, instance); err != nil {
-		logger.Error(err, "Failed to remove CodeFlare finalizer")
-		return fmt.Errorf("failed to remove CodeFlare finalizer: %w", err)
-	}
-
-	logger.Info("Successfully removed CodeFlare finalizer - migration complete")
-	r.Recorder.Event(instance, corev1.EventTypeNormal, "MigrationComplete",
-		"Successfully migrated from CodeFlare operator. MTLS and NetworkPolicy now managed by KubeRay.")
-
-	// On next reconcile, finalizer will be gone and this function will be skipped
-	return nil
 }
 
 // SetupWithManager builds the reconciler.

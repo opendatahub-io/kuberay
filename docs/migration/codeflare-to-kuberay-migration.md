@@ -23,21 +23,33 @@ flowchart TD
     subgraph "RayCluster Reconciliation"
         A[Start Reconcile] --> B{CodeFlare Finalizer<br/>Present?}
         B -->|No| C[Skip Migration<br/>Continue Normal Reconcile]
-        B -->|Yes| D[Start Migration]
+        B -->|Yes| D{Suspended for<br/>Migration?}
         
-        subgraph "Migration Process"
-            D --> E[Clean Pod Specs<br/>Remove TLS/OAuth injections]
-            E --> F[Add Annotation<br/>odh.ray.io/secure-trusted-network: true]
-            F --> G[Backup CA Secret<br/>ca-secret-cluster → backup]
-            G --> H[Delete Old NetworkPolicies<br/>cluster-head, cluster-workers]
-            H --> I[Delete Old CA Secret]
-            I --> J[Delete OAuth Resources<br/>Services, Secrets, ServiceAccounts<br/>ClusterRoleBindings, Routes]
-            J --> K[Remove CodeFlare Finalizer]
-            K --> L[Update RayCluster CR]
+        D -->|No| E[PHASE 1: Start Migration]
+        D -->|Yes| P[PHASE 2: Complete Migration]
+        
+        subgraph "Phase 1: Cleanup & Suspend"
+            E --> F[Clean Pod Specs<br/>Remove TLS/OAuth injections]
+            F --> G[Add Annotation<br/>odh.ray.io/secure-trusted-network: true]
+            G --> H[Backup CA Secret<br/>ca-secret-cluster → backup]
+            H --> I[Delete Old NetworkPolicies<br/>cluster-head, cluster-workers]
+            I --> J[Delete Old CA Secret]
+            J --> K[Delete OAuth Resources<br/>Services, Secrets, ServiceAccounts<br/>ClusterRoleBindings, Routes]
+            K --> L[SET SUSPEND=TRUE<br/>Mark migration-in-progress]
+            L --> M[Update RayCluster CR]
         end
         
-        L -->|Success| M[Migration Complete<br/>Event: MigrationComplete]
-        L -->|Conflict Error| N[Requeue<br/>Retry on next reconcile]
+        M -->|Success| N[Requeue<br/>Pods will be deleted]
+        
+        subgraph "Phase 2: Unsuspend"
+            P --> Q{All Pods<br/>Terminated?}
+            Q -->|No| R[Wait for Pods<br/>Requeue]
+            Q -->|Yes| S[Remove CodeFlare Finalizer]
+            S --> T[SET SUSPEND=FALSE]
+            T --> U[Update RayCluster CR]
+        end
+        
+        U -->|Success| V[Migration Complete!<br/>Pods recreated with new certs]
     end
     
     subgraph "Other Controllers During Migration"
@@ -138,6 +150,89 @@ After cleanup, the migration adds:
 | Item | Value | Purpose |
 |------|-------|---------|
 | Annotation | `odh.ray.io/secure-trusted-network: "true"` | Triggers KubeRay's MTLS and NetworkPolicy controllers |
+
+## Pod Restart and Data Retention
+
+### Why Cluster Is Suspended
+
+The migration uses a **two-phase suspend/unsuspend approach** to ensure consistent certificate rotation.
+
+CodeFlare and KubeRay use **different Certificate Authorities** for mTLS:
+- CodeFlare: Self-signed CA created by `codeflare-operator`
+- KubeRay: Cert-manager CA created by `RayClusterMTLSController`
+
+A rolling restart would cause certificate incompatibility:
+
+```
+Timeline WITHOUT suspend (problematic):
+────────────────────────────────────────────────────────────────────
+T0: All pods have CodeFlare TLS (CA-A certificates)
+T1: Head pod recreated with KubeRay TLS (CA-B certificates)
+T2: Workers still have CA-A certificates
+    ❌ HEAD (CA-B) cannot communicate with WORKERS (CA-A)
+T3: Workers recreated with CA-B
+T4: All pods have CA-B - cluster healthy
+────────────────────────────────────────────────────────────────────
+    Window T1-T3: CLUSTER BROKEN (mixed certificates)
+```
+
+By suspending the cluster:
+1. **Phase 1**: All pods are gracefully terminated (standard Kubernetes lifecycle)
+2. **Phase 2**: After all pods are gone, cluster is unsuspended
+3. All pods are recreated simultaneously with the new CA
+
+This approach:
+- Uses standard Kubernetes/KubeRay suspend mechanism
+- Graceful termination (respects terminationGracePeriodSeconds)
+- Clear state transition (suspended → unsuspended)
+- No mixed certificate window
+
+### What Gets Lost
+
+| Data Type | Lost on Restart? | How to Preserve |
+|-----------|------------------|-----------------|
+| In-memory object store | ✅ Yes | Use external storage (S3, GCS, MinIO) |
+| Actor state | ✅ Yes | Use actor checkpointing |
+| Running tasks | ✅ Yes | Use task retries (`max_retries`) |
+| GCS metadata | ❌ No* | Enable GCS Fault Tolerance |
+| Submitted jobs | ❌ No* | Enable GCS Fault Tolerance |
+| Cluster configuration | ❌ No | Stored in RayCluster CR |
+
+*With GCS Fault Tolerance enabled
+
+### Recommended: Enable GCS Fault Tolerance BEFORE Migration
+
+For production clusters, enable GCS Fault Tolerance with Redis **before upgrading**:
+
+```yaml
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: my-cluster
+  annotations:
+    ray.io/ft-enabled: "true"
+spec:
+  headGroupSpec:
+    rayStartParams:
+      redis-address: "redis:6379"  # External Redis for GCS storage
+      redis-password: "your-password"  # If using auth
+```
+
+With GCS FT enabled:
+- Cluster metadata survives pod restarts
+- Job definitions are preserved
+- Actor placement groups are preserved
+- Workers automatically reconnect after head restart
+
+### Migration Events
+
+The migration emits Kubernetes events to inform users:
+
+| Event | Type | Phase | Message |
+|-------|------|-------|---------|
+| `MigrationStarted` | Normal | 1 | Starting migration from CodeFlare operator. Cluster will be temporarily suspended. |
+| `MigrationSuspending` | Warning | 1 | Suspending cluster for certificate rotation. Enable GCS FT to preserve state. |
+| `MigrationComplete` | Normal | 2 | Successfully migrated. Cluster unsuspended, pods will be recreated. |
 
 ## Implementation Details
 
