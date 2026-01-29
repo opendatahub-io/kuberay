@@ -132,6 +132,10 @@ func NewRayClusterMTLSController(client client.Client, scheme *runtime.Scheme, c
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 
+// CodeFlareOperatorFinalizer is the finalizer used by the old CodeFlare operator
+// We skip reconciliation when this finalizer is present to avoid conflicts during migration
+const CodeFlareOperatorFinalizerMTLS = "ray.openshift.ai/oauth-finalizer"
+
 // Reconcile handles the reconciliation of CA certificates using cert-manager
 func (r *RayClusterMTLSController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -145,6 +149,16 @@ func (r *RayClusterMTLSController) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		logger.Error(err, "Failed to get RayCluster")
 		return ctrl.Result{}, err
+	}
+
+	// Skip reconciliation if CodeFlare finalizer is present - migration must complete first
+	// This prevents conflicts during the one-time migration from CodeFlare operator
+	for _, finalizer := range instance.Finalizers {
+		if finalizer == CodeFlareOperatorFinalizerMTLS {
+			logger.Info("CodeFlare finalizer present, skipping MTLS reconciliation until migration completes",
+				"rayCluster", instance.Name, "finalizer", CodeFlareOperatorFinalizerMTLS)
+			return ctrl.Result{RequeueAfter: RayClusterMTLSDefaultRequeueDuration}, nil
+		}
 	}
 
 	// Check if MTLS is enabled via annotation

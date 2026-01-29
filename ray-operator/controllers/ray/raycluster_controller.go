@@ -45,6 +45,12 @@ import (
 
 type reconcileFunc func(context.Context, *rayv1.RayCluster) error
 
+const (
+	// CodeFlare operator finalizer that will be present on RayClusters from RHOAI 2.x
+	// This finalizer is used as the trigger for one-time migration from CodeFlare operator to KubeRay management
+	CodeFlareOperatorFinalizer = "ray.openshift.ai/oauth-finalizer"
+)
+
 var (
 	DefaultRequeueDuration = 2 * time.Second
 
@@ -167,6 +173,15 @@ func (r *RayClusterReconciler) rayClusterReconcile(ctx context.Context, instance
 	if manager := utils.ManagedByExternalController(instance.Spec.ManagedBy); manager != nil {
 		logger.Info("Skipping RayCluster managed by a custom controller", "managed-by", manager)
 		return ctrl.Result{}, nil
+	}
+
+	// ============================================================================
+	// MIGRATION: Check for CodeFlare finalizer and perform one-time migration
+	// This MUST happen before any other reconciliation logic to ensure clean state
+	// ============================================================================
+	if err := r.migrateFromCodeFlare(ctx, instance); err != nil {
+		logger.Error(err, "Failed to migrate from CodeFlare operator")
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
 	setDefaults(instance)
@@ -1518,6 +1533,316 @@ func (r *RayClusterReconciler) buildRedisCleanupJob(ctx context.Context, instanc
 	}
 
 	return redisCleanupJob
+}
+
+// cleanCodeFlareInjections removes CodeFlare-injected TLS/OAuth components from RayCluster pod specs
+// Based on the CodeFlare SDK _process_ray_cluster_yaml function and codeflare-operator webhook
+// This function is called during migration to clean up hardcoded TLS configuration
+func cleanCodeFlareInjections(instance *rayv1.RayCluster) {
+	// TLS environment variables to remove (from codeflare-operator/pkg/controllers/raycluster_webhook.go envVarList())
+	tlsEnvVars := map[string]bool{
+		"MY_POD_IP":           true, // CodeFlare injects this for TLS cert generation
+		"RAY_USE_TLS":         true,
+		"RAY_TLS_SERVER_CERT": true,
+		"RAY_TLS_SERVER_KEY":  true,
+		"RAY_TLS_CA_CERT":     true,
+	}
+
+	// Volume names to remove (from codeflare-operator/pkg/controllers/raycluster_webhook.go caVolumes() and oauthProxyTLSSecretVolume())
+	volumesToRemove := map[string]bool{
+		"ca-vol":           true, // Secret volume for CA certificate
+		"server-cert":      true, // EmptyDir volume for generated server certificates
+		"proxy-tls-secret": true, // Secret volume for OAuth proxy TLS
+	}
+
+	// Volume mount names to remove
+	volumeMountsToRemove := map[string]bool{
+		"ca-vol":      true,
+		"server-cert": true,
+	}
+
+	// Container names to remove (sidecars)
+	containersToRemove := map[string]bool{
+		"oauth-proxy": true,
+	}
+
+	// Helper to clean a single container
+	cleanContainer := func(container *corev1.Container) {
+		// Remove TLS environment variables
+		if container.Env != nil {
+			newEnv := []corev1.EnvVar{}
+			for _, env := range container.Env {
+				if !tlsEnvVars[env.Name] {
+					newEnv = append(newEnv, env)
+				}
+			}
+			container.Env = newEnv
+		}
+
+		// Remove TLS volume mounts
+		if container.VolumeMounts != nil {
+			newMounts := []corev1.VolumeMount{}
+			for _, mount := range container.VolumeMounts {
+				if !volumeMountsToRemove[mount.Name] {
+					newMounts = append(newMounts, mount)
+				}
+			}
+			container.VolumeMounts = newMounts
+		}
+	}
+
+	// Helper to clean a pod spec
+	cleanPodSpec := func(podSpec *corev1.PodSpec) {
+		// Remove sidecar containers (oauth-proxy)
+		if podSpec.Containers != nil {
+			newContainers := []corev1.Container{}
+			for _, container := range podSpec.Containers {
+				if !containersToRemove[container.Name] {
+					cleanContainer(&container)
+					newContainers = append(newContainers, container)
+				}
+			}
+			podSpec.Containers = newContainers
+		}
+
+		// Remove all initContainers (cert generation)
+		podSpec.InitContainers = nil
+
+		// Remove serviceAccountName
+		podSpec.ServiceAccountName = ""
+
+		// Remove TLS/OAuth volumes
+		if podSpec.Volumes != nil {
+			newVolumes := []corev1.Volume{}
+			for _, volume := range podSpec.Volumes {
+				if !volumesToRemove[volume.Name] {
+					newVolumes = append(newVolumes, volume)
+				}
+			}
+			podSpec.Volumes = newVolumes
+		}
+	}
+
+	// Clean head group spec
+	if instance.Spec.HeadGroupSpec.Template.Spec.Containers != nil {
+		cleanPodSpec(&instance.Spec.HeadGroupSpec.Template.Spec)
+	}
+
+	// Disable enableIngress if it was set to true by CodeFlare
+	if instance.Spec.HeadGroupSpec.EnableIngress != nil && *instance.Spec.HeadGroupSpec.EnableIngress {
+		enableIngress := false
+		instance.Spec.HeadGroupSpec.EnableIngress = &enableIngress
+	}
+
+	// Clean worker group specs
+	for i := range instance.Spec.WorkerGroupSpecs {
+		if instance.Spec.WorkerGroupSpecs[i].Template.Spec.Containers != nil {
+			cleanPodSpec(&instance.Spec.WorkerGroupSpecs[i].Template.Spec)
+		}
+	}
+}
+
+// migrateFromCodeFlare performs a one-time migration from CodeFlare operator management
+// This function only executes when the CodeFlare finalizer is present on the CR.
+// After updating the CR, the finalizer is removed and this function never runs again.
+func (r *RayClusterReconciler) migrateFromCodeFlare(ctx context.Context, instance *rayv1.RayCluster) error {
+	logger := ctrl.LoggerFrom(ctx).WithName("codeflare-migration")
+
+	// Check if CodeFlare finalizer is present - this is the ONLY trigger
+	hasCodeFlareFinalizer := false
+	for _, finalizer := range instance.Finalizers {
+		if finalizer == CodeFlareOperatorFinalizer {
+			hasCodeFlareFinalizer = true
+			break
+		}
+	}
+
+	// If no finalizer, skip migration (already migrated or never managed by CodeFlare)
+	if !hasCodeFlareFinalizer {
+		return nil
+	}
+
+	logger.Info("CodeFlare finalizer detected - performing one-time migration",
+		"cluster", instance.Name,
+		"namespace", instance.Namespace)
+
+	// Record migration start event
+	r.Recorder.Event(instance, corev1.EventTypeNormal, "MigrationStarted",
+		"Starting migration from CodeFlare operator to KubeRay management")
+
+	// Step 1: Remove CodeFlare-injected TLS/OAuth components from pod specs
+	cleanCodeFlareInjections(instance)
+	logger.Info("Cleaned CodeFlare TLS/OAuth injections from pod specs")
+
+	// Step 2: Add annotation to enable KubeRay MTLS and NetworkPolicy controllers
+	if instance.Annotations == nil {
+		instance.Annotations = make(map[string]string)
+	}
+	instance.Annotations[utils.EnableSecureTrustedNetworkAnnotationKey] = "true"
+	logger.Info("Added secure-trusted-network annotation to enable KubeRay controllers")
+
+	// Step 3: Backup CodeFlare CA secret if it exists
+	oldCASecretName := fmt.Sprintf("ca-secret-%s", instance.Name)
+	oldCASecret := &corev1.Secret{}
+	oldCAKey := client.ObjectKey{Namespace: instance.Namespace, Name: oldCASecretName}
+
+	if err := r.Get(ctx, oldCAKey, oldCASecret); err == nil {
+		// Create backup with timestamp
+		backupSecret := oldCASecret.DeepCopy()
+		backupSecret.Name = fmt.Sprintf("%s-backup-%d", oldCASecretName, time.Now().Unix())
+		backupSecret.ResourceVersion = ""
+		backupSecret.UID = ""
+		if backupSecret.Labels == nil {
+			backupSecret.Labels = make(map[string]string)
+		}
+		backupSecret.Labels["app.kubernetes.io/managed-by"] = "kuberay-migration"
+		backupSecret.Labels["migration.odh.ray.io/original-name"] = oldCASecretName
+
+		if err := r.Create(ctx, backupSecret); err != nil && !errors.IsAlreadyExists(err) {
+			logger.Error(err, "Failed to backup CodeFlare CA secret")
+			// Don't fail migration for backup errors
+		} else {
+			logger.Info("Backed up CodeFlare CA secret", "backup", backupSecret.Name)
+		}
+	}
+
+	// Step 4: Delete old CodeFlare NetworkPolicies (not owned by RayCluster)
+	oldNetPolNames := []string{
+		fmt.Sprintf("%s-head", instance.Name),
+		fmt.Sprintf("%s-workers", instance.Name),
+	}
+
+	for _, oldName := range oldNetPolNames {
+		oldNetPol := &networkingv1.NetworkPolicy{}
+		oldKey := client.ObjectKey{Namespace: instance.Namespace, Name: oldName}
+
+		if err := r.Get(ctx, oldKey, oldNetPol); err == nil {
+			// Only delete if NOT owned by RayCluster (i.e., owned by CodeFlare)
+			if !metav1.IsControlledBy(oldNetPol, instance) {
+				if err := r.Delete(ctx, oldNetPol); err != nil && !errors.IsNotFound(err) {
+					logger.Error(err, "Failed to delete old NetworkPolicy", "name", oldName)
+				} else {
+					logger.Info("Deleted old CodeFlare NetworkPolicy", "name", oldName)
+				}
+			}
+		}
+	}
+
+	// Step 5: Delete old CodeFlare CA secret (after backing up)
+	if err := r.Delete(ctx, oldCASecret); err != nil && !errors.IsNotFound(err) {
+		logger.Error(err, "Failed to delete old CA secret")
+		// Don't fail migration for cleanup errors
+	} else if err == nil {
+		logger.Info("Deleted old CodeFlare CA secret", "name", oldCASecretName)
+	}
+
+	// Step 6: Delete old CodeFlare OAuth-related resources by label
+	// CodeFlare creates resources with label: ray.openshift.ai/cluster-name
+	codeflareLabels := client.MatchingLabels{
+		"ray.openshift.ai/cluster-name": instance.Name,
+	}
+	codeflareLabelsWithNamespace := client.MatchingLabels{
+		"ray.openshift.ai/cluster-name":      instance.Name,
+		"ray.openshift.ai/cluster-namespace": instance.Namespace,
+	}
+
+	// Delete ClusterRoleBindings (cluster-scoped, won't be garbage collected)
+	crbList := &rbacv1.ClusterRoleBindingList{}
+	if err := r.List(ctx, crbList, codeflareLabelsWithNamespace); err != nil {
+		logger.Error(err, "Failed to list CodeFlare ClusterRoleBindings")
+	} else {
+		for _, crb := range crbList.Items {
+			if err := r.Delete(ctx, &crb); err != nil && !errors.IsNotFound(err) {
+				logger.Error(err, "Failed to delete old ClusterRoleBinding", "name", crb.Name)
+			} else {
+				logger.Info("Deleted old CodeFlare ClusterRoleBinding", "name", crb.Name)
+			}
+		}
+	}
+
+	// Delete OAuth Services
+	svcList := &corev1.ServiceList{}
+	if err := r.List(ctx, svcList, codeflareLabels, client.InNamespace(instance.Namespace)); err != nil {
+		logger.Error(err, "Failed to list CodeFlare Services")
+	} else {
+		for _, svc := range svcList.Items {
+			if err := r.Delete(ctx, &svc); err != nil && !errors.IsNotFound(err) {
+				logger.Error(err, "Failed to delete old Service", "name", svc.Name)
+			} else {
+				logger.Info("Deleted old CodeFlare Service", "name", svc.Name)
+			}
+		}
+	}
+
+	// Delete OAuth Secrets
+	secretList := &corev1.SecretList{}
+	if err := r.List(ctx, secretList, codeflareLabels, client.InNamespace(instance.Namespace)); err != nil {
+		logger.Error(err, "Failed to list CodeFlare Secrets")
+	} else {
+		for _, secret := range secretList.Items {
+			if err := r.Delete(ctx, &secret); err != nil && !errors.IsNotFound(err) {
+				logger.Error(err, "Failed to delete old Secret", "name", secret.Name)
+			} else {
+				logger.Info("Deleted old CodeFlare Secret", "name", secret.Name)
+			}
+		}
+	}
+
+	// Delete OAuth ServiceAccounts
+	saList := &corev1.ServiceAccountList{}
+	if err := r.List(ctx, saList, codeflareLabels, client.InNamespace(instance.Namespace)); err != nil {
+		logger.Error(err, "Failed to list CodeFlare ServiceAccounts")
+	} else {
+		for _, sa := range saList.Items {
+			if err := r.Delete(ctx, &sa); err != nil && !errors.IsNotFound(err) {
+				logger.Error(err, "Failed to delete old ServiceAccount", "name", sa.Name)
+			} else {
+				logger.Info("Deleted old CodeFlare ServiceAccount", "name", sa.Name)
+			}
+		}
+	}
+
+	// Delete OpenShift Routes if on OpenShift (best effort)
+	if r.options.IsOpenShift {
+		routeList := &routev1.RouteList{}
+		if err := r.List(ctx, routeList, codeflareLabels, client.InNamespace(instance.Namespace)); err != nil {
+			// This might fail if Route API is not available, which is fine
+			logger.V(1).Info("Failed to list CodeFlare Routes (may not be on OpenShift)", "error", err.Error())
+		} else {
+			for _, route := range routeList.Items {
+				if err := r.Delete(ctx, &route); err != nil && !errors.IsNotFound(err) {
+					logger.Error(err, "Failed to delete old Route", "name", route.Name)
+				} else {
+					logger.Info("Deleted old CodeFlare Route", "name", route.Name)
+				}
+			}
+		}
+	}
+
+	// Step 7: Update the CR to persist changes and remove CodeFlare finalizer
+	logger.Info("Updating RayCluster to remove CodeFlare finalizer")
+
+	// Remove the CodeFlare finalizer
+	newFinalizers := []string{}
+	for _, f := range instance.Finalizers {
+		if f != CodeFlareOperatorFinalizer {
+			newFinalizers = append(newFinalizers, f)
+		}
+	}
+	instance.Finalizers = newFinalizers
+
+	// Update the CR - this removes the finalizer and persists all changes
+	if err := r.Update(ctx, instance); err != nil {
+		logger.Error(err, "Failed to remove CodeFlare finalizer")
+		return fmt.Errorf("failed to remove CodeFlare finalizer: %w", err)
+	}
+
+	logger.Info("Successfully removed CodeFlare finalizer - migration complete")
+	r.Recorder.Event(instance, corev1.EventTypeNormal, "MigrationComplete",
+		"Successfully migrated from CodeFlare operator. MTLS and NetworkPolicy now managed by KubeRay.")
+
+	// On next reconcile, finalizer will be gone and this function will be skipped
+	return nil
 }
 
 // SetupWithManager builds the reconciler.
