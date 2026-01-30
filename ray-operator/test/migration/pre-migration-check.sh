@@ -1,32 +1,27 @@
 #!/bin/bash
 # pre-migration-check.sh
-# Captures the state of RayClusters before migration for later comparison
+# Displays the current state of RayClusters to verify CodeFlare-operator configuration
 #
-# Usage: ./pre-migration-check.sh [namespace] [output-dir]
+# Usage: ./pre-migration-check.sh [namespace]
 #
-# This script captures:
-# - RayCluster CR specs (excluding status)
-# - Container names, env vars, volume mounts
-# - InitContainer names
-# - ServiceAccountNames
-# - Volumes
-# - Related resources (Services, Secrets, NetworkPolicies, etc.)
+# This script checks for CodeFlare-operator injected items:
+# - oauth-proxy sidecar container
+# - create-cert initContainer
+# - TLS environment variables (RAY_USE_TLS, etc.)
+# - ca-vol, server-cert, proxy-tls-secret volumes
+# - CodeFlare finalizer
+# - Related external resources
 
 set -e
 
 NAMESPACE="${1:-test-migration}"
-OUTPUT_DIR="${2:-/tmp/migration-check/pre}"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 
 echo "=============================================="
 echo "Pre-Migration Check for RayClusters"
 echo "Namespace: $NAMESPACE"
-echo "Output directory: $OUTPUT_DIR"
 echo "Timestamp: $TIMESTAMP"
 echo "=============================================="
-
-# Create output directory
-mkdir -p "$OUTPUT_DIR"
 
 # Check if namespace exists
 if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
@@ -46,22 +41,118 @@ echo ""
 echo "Found RayClusters: $RAYCLUSTERS"
 echo ""
 
-# Function to extract and save RayCluster details
+# Function to extract and display RayCluster details
 extract_raycluster_details() {
     local name=$1
-    local outfile="$OUTPUT_DIR/${name}.json"
     
+    echo ""
     echo "Processing RayCluster: $name"
+    echo ""
     
-    # Get full RayCluster spec
-    kubectl get raycluster "$name" -n "$NAMESPACE" -o json > "$outfile"
-    
-    # Create summary file
-    local summary="$OUTPUT_DIR/${name}-summary.txt"
     {
         echo "RayCluster: $name"
         echo "Captured at: $TIMESTAMP"
         echo "=============================================="
+        echo ""
+        
+        # ============================================
+        # CODEFLARE-SPECIFIC ITEMS CHECK
+        # ============================================
+        echo "=== CodeFlare-Operator Detection ==="
+        echo ""
+        
+        # Check for CodeFlare finalizer
+        local all_finalizers=$(kubectl get raycluster "$name" -n "$NAMESPACE" -o jsonpath='{.metadata.finalizers[*]}' 2>/dev/null || echo "")
+        local has_cf_finalizer=$(echo "$all_finalizers" | grep -c "ray.openshift.ai/oauth-finalizer" || echo "0")
+        echo "CodeFlare Finalizer (ray.openshift.ai/oauth-finalizer): $([ "$has_cf_finalizer" -gt 0 ] && echo "PRESENT ✓" || echo "NOT PRESENT")"
+        echo "  All Finalizers: ${all_finalizers:-(none)}"
+        
+        # Check for CodeFlare version annotation
+        local cf_version=$(kubectl get raycluster "$name" -n "$NAMESPACE" -o jsonpath='{.metadata.annotations.ray\.openshift\.ai/version}' 2>/dev/null || echo "")
+        local has_cf_version=$([ -n "$cf_version" ] && echo "1" || echo "0")
+        echo "CodeFlare Version Annotation (ray.openshift.ai/version): $([ "$has_cf_version" -gt 0 ] && echo "PRESENT ✓ (value: $cf_version)" || echo "NOT PRESENT")"
+        echo ""
+        
+        echo "--- Head Group CodeFlare Items ---"
+        
+        # Check for oauth-proxy sidecar
+        local head_containers=$(kubectl get raycluster "$name" -n "$NAMESPACE" -o jsonpath='{.spec.headGroupSpec.template.spec.containers[*].name}' 2>/dev/null || echo "")
+        local has_oauth_proxy=$(echo "$head_containers" | grep -c "oauth-proxy" || echo "0")
+        echo "OAuth Proxy Sidecar: $([ "$has_oauth_proxy" -gt 0 ] && echo "PRESENT ✓" || echo "NOT PRESENT")"
+        echo "  All Head Containers: ${head_containers:-(none)}"
+        
+        # Check for create-cert initContainer (head)
+        local head_init=$(kubectl get raycluster "$name" -n "$NAMESPACE" -o jsonpath='{.spec.headGroupSpec.template.spec.initContainers[*].name}' 2>/dev/null || echo "")
+        local has_create_cert_head=$(echo "$head_init" | grep -c "create-cert" || echo "0")
+        echo "create-cert InitContainer: $([ "$has_create_cert_head" -gt 0 ] && echo "PRESENT ✓" || echo "NOT PRESENT")"
+        echo "  All Head InitContainers: ${head_init:-(none)}"
+        
+        # Check for CodeFlare TLS env vars
+        local head_env=$(kubectl get raycluster "$name" -n "$NAMESPACE" -o jsonpath='{.spec.headGroupSpec.template.spec.containers[0].env[*].name}' 2>/dev/null || echo "")
+        local has_ray_use_tls=$(echo "$head_env" | grep -c "RAY_USE_TLS" || echo "0")
+        local has_my_pod_ip=$(echo "$head_env" | grep -c "MY_POD_IP" || echo "0")
+        local has_tls_cert=$(echo "$head_env" | grep -c "RAY_TLS_SERVER_CERT" || echo "0")
+        local has_tls_key=$(echo "$head_env" | grep -c "RAY_TLS_SERVER_KEY" || echo "0")
+        local has_tls_ca=$(echo "$head_env" | grep -c "RAY_TLS_CA_CERT" || echo "0")
+        echo "CodeFlare Env Vars:"
+        echo "  MY_POD_IP: $([ "$has_my_pod_ip" -gt 0 ] && echo "PRESENT ✓" || echo "NOT PRESENT")"
+        echo "  RAY_USE_TLS: $([ "$has_ray_use_tls" -gt 0 ] && echo "PRESENT ✓" || echo "NOT PRESENT")"
+        echo "  RAY_TLS_SERVER_CERT: $([ "$has_tls_cert" -gt 0 ] && echo "PRESENT ✓" || echo "NOT PRESENT")"
+        echo "  RAY_TLS_SERVER_KEY: $([ "$has_tls_key" -gt 0 ] && echo "PRESENT ✓" || echo "NOT PRESENT")"
+        echo "  RAY_TLS_CA_CERT: $([ "$has_tls_ca" -gt 0 ] && echo "PRESENT ✓" || echo "NOT PRESENT")"
+        echo "  All Head Env Vars: ${head_env:-(none)}"
+        
+        # Check for CodeFlare volumes
+        local head_volumes=$(kubectl get raycluster "$name" -n "$NAMESPACE" -o jsonpath='{.spec.headGroupSpec.template.spec.volumes[*].name}' 2>/dev/null || echo "")
+        local has_ca_vol=$(echo "$head_volumes" | grep -c "ca-vol" || echo "0")
+        local has_server_cert=$(echo "$head_volumes" | grep -c "server-cert" || echo "0")
+        local has_proxy_tls=$(echo "$head_volumes" | grep -c "proxy-tls-secret" || echo "0")
+        echo "CodeFlare Volumes:"
+        echo "  ca-vol: $([ "$has_ca_vol" -gt 0 ] && echo "PRESENT ✓" || echo "NOT PRESENT")"
+        echo "  server-cert: $([ "$has_server_cert" -gt 0 ] && echo "PRESENT ✓" || echo "NOT PRESENT")"
+        echo "  proxy-tls-secret: $([ "$has_proxy_tls" -gt 0 ] && echo "PRESENT ✓" || echo "NOT PRESENT")"
+        echo "  All Head Volumes: ${head_volumes:-(none)}"
+        
+        # Check for CodeFlare volume mounts
+        local head_mounts=$(kubectl get raycluster "$name" -n "$NAMESPACE" -o jsonpath='{range .spec.headGroupSpec.template.spec.containers[?(@.name=="ray-head")].volumeMounts[*]}{.name}{" "}{end}' 2>/dev/null || echo "")
+        local has_ca_vol_mount=$(echo "$head_mounts" | grep -c "ca-vol" || echo "0")
+        local has_server_cert_mount=$(echo "$head_mounts" | grep -c "server-cert" || echo "0")
+        echo "CodeFlare Volume Mounts:"
+        echo "  ca-vol: $([ "$has_ca_vol_mount" -gt 0 ] && echo "PRESENT ✓" || echo "NOT PRESENT")"
+        echo "  server-cert: $([ "$has_server_cert_mount" -gt 0 ] && echo "PRESENT ✓" || echo "NOT PRESENT")"
+        echo "  All Head Mounts: ${head_mounts:-(none)}"
+        
+        # Check for CodeFlare ServiceAccountName
+        local sa_name=$(kubectl get raycluster "$name" -n "$NAMESPACE" -o jsonpath='{.spec.headGroupSpec.template.spec.serviceAccountName}' 2>/dev/null || echo "")
+        local is_oauth_sa=$(echo "$sa_name" | grep -c "oauth-proxy" || echo "0")
+        echo "ServiceAccountName: ${sa_name:-(not set)} $([ "$is_oauth_sa" -gt 0 ] && echo "(CODEFLARE ✓)" || echo "")"
+        echo ""
+        
+        # Check worker groups for CodeFlare items
+        local num_workers=$(kubectl get raycluster "$name" -n "$NAMESPACE" -o jsonpath='{.spec.workerGroupSpecs}' 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
+        if [ "$num_workers" -gt 0 ]; then
+            echo "--- Worker Groups CodeFlare Items ---"
+            for wi in $(seq 0 $((num_workers - 1))); do
+                echo "Worker Group $wi:"
+                
+                local worker_init=$(kubectl get raycluster "$name" -n "$NAMESPACE" -o jsonpath="{.spec.workerGroupSpecs[$wi].template.spec.initContainers[*].name}" 2>/dev/null || echo "")
+                local has_create_cert_w=$(echo "$worker_init" | grep -c "create-cert" || echo "0")
+                echo "  create-cert InitContainer: $([ "$has_create_cert_w" -gt 0 ] && echo "PRESENT ✓" || echo "NOT PRESENT")"
+                echo "    All Worker InitContainers: ${worker_init:-(none)}"
+                
+                local worker_env=$(kubectl get raycluster "$name" -n "$NAMESPACE" -o jsonpath="{.spec.workerGroupSpecs[$wi].template.spec.containers[0].env[*].name}" 2>/dev/null || echo "")
+                local has_ray_tls_w=$(echo "$worker_env" | grep -c "RAY_USE_TLS" || echo "0")
+                echo "  RAY_USE_TLS: $([ "$has_ray_tls_w" -gt 0 ] && echo "PRESENT ✓" || echo "NOT PRESENT")"
+                echo "    All Worker Env Vars: ${worker_env:-(none)}"
+                
+                local worker_volumes=$(kubectl get raycluster "$name" -n "$NAMESPACE" -o jsonpath="{.spec.workerGroupSpecs[$wi].template.spec.volumes[*].name}" 2>/dev/null || echo "")
+                local has_ca_vol_w=$(echo "$worker_volumes" | grep -c "ca-vol" || echo "0")
+                echo "  ca-vol Volume: $([ "$has_ca_vol_w" -gt 0 ] && echo "PRESENT ✓" || echo "NOT PRESENT")"
+                echo "    All Worker Volumes: ${worker_volumes:-(none)}"
+            done
+        fi
+        echo ""
+        echo "----------------------------------------------"
         echo ""
         
         # Finalizers
@@ -151,56 +242,58 @@ extract_raycluster_details() {
             echo ""
         done
         
-    } > "$summary"
-    
-    echo "  Saved to: $outfile"
-    echo "  Summary: $summary"
+    }
 }
 
-# Function to capture related resources
+# Function to display related resources
 capture_related_resources() {
     local name=$1
-    local resource_dir="$OUTPUT_DIR/${name}-resources"
-    mkdir -p "$resource_dir"
     
     echo ""
-    echo "Capturing related resources for: $name"
+    echo "=== Related Resources for: $name ==="
+    echo ""
     
     # Services
-    echo "  - Services..."
-    kubectl get services -n "$NAMESPACE" -l "ray.io/cluster=$name" -o json > "$resource_dir/services.json" 2>/dev/null || echo '{"items":[]}' > "$resource_dir/services.json"
+    echo "Services (matching $name or oauth):"
+    local services=$(kubectl get services -n "$NAMESPACE" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E "(${name}|oauth)" || echo "(none)")
+    echo "  $services"
+    echo ""
     
-    # Secrets (list names only for security)
-    echo "  - Secrets..."
-    kubectl get secrets -n "$NAMESPACE" -l "ray.io/cluster=$name" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' > "$resource_dir/secrets.txt" 2>/dev/null || echo "(none)" > "$resource_dir/secrets.txt"
-    
-    # Also capture CodeFlare CA secrets
-    kubectl get secrets -n "$NAMESPACE" -o name 2>/dev/null | grep -E "(ca-secret|proxy-tls)" >> "$resource_dir/secrets.txt" 2>/dev/null || true
+    # Secrets
+    echo "Secrets (CodeFlare-related patterns):"
+    # CodeFlare patterns: ca-secret-{cluster}, {cluster}-oauth-config, {cluster}-proxy-tls-secret
+    local secrets=$(kubectl get secrets -n "$NAMESPACE" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E "^(ca-secret-${name}|${name}-oauth-config|${name}-proxy-tls-secret)$" 2>/dev/null || echo "(none)")
+    echo "  $secrets"
+    echo ""
     
     # NetworkPolicies
-    echo "  - NetworkPolicies..."
-    kubectl get networkpolicies -n "$NAMESPACE" -l "ray.io/cluster=$name" -o json > "$resource_dir/networkpolicies.json" 2>/dev/null || echo '{"items":[]}' > "$resource_dir/networkpolicies.json"
+    echo "NetworkPolicies (matching $name):"
+    local netpols=$(kubectl get networkpolicies -n "$NAMESPACE" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E "${name}" || echo "(none)")
+    echo "  $netpols"
+    echo ""
     
-    # Also capture any CodeFlare-created NetworkPolicies
-    kubectl get networkpolicies -n "$NAMESPACE" -o json 2>/dev/null | jq "[.items[] | select(.metadata.name | contains(\"$name\"))]" > "$resource_dir/networkpolicies-all.json" 2>/dev/null || echo '[]' > "$resource_dir/networkpolicies-all.json"
+    # ServiceAccounts (CodeFlare-created with label)
+    echo "ServiceAccounts (CodeFlare-created with ray.openshift.ai/cluster-name label):"
+    local sas=$(kubectl get serviceaccounts -n "$NAMESPACE" -l "ray.openshift.ai/cluster-name=$name" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || echo "(none)")
+    echo "  $sas"
+    echo ""
     
-    # ServiceAccounts
-    echo "  - ServiceAccounts..."
-    kubectl get serviceaccounts -n "$NAMESPACE" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E "(oauth-proxy|$name)" > "$resource_dir/serviceaccounts.txt" 2>/dev/null || echo "(none)" > "$resource_dir/serviceaccounts.txt"
+    # ClusterRoleBindings
+    echo "ClusterRoleBindings (matching $name):"
+    local crbs=$(kubectl get clusterrolebindings -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E "(${name}.*auth|${name})" 2>/dev/null || echo "(none)")
+    echo "  $crbs"
+    echo ""
     
-    # ClusterRoleBindings (cluster-scoped)
-    echo "  - ClusterRoleBindings..."
-    kubectl get clusterrolebindings -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep "$name" > "$resource_dir/clusterrolebindings.txt" 2>/dev/null || echo "(none)" > "$resource_dir/clusterrolebindings.txt"
-    
-    # Routes (OpenShift)
-    echo "  - Routes..."
-    kubectl get routes -n "$NAMESPACE" -l "ray.io/cluster=$name" -o json > "$resource_dir/routes.json" 2>/dev/null || echo '{"items":[]}' > "$resource_dir/routes.json"
+    # Routes
+    echo "Routes (ray-dashboard/rayclient patterns):"
+    local routes=$(kubectl get routes -n "$NAMESPACE" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E "(ray-dashboard-${name}|rayclient-${name})" 2>/dev/null || echo "(none)")
+    echo "  $routes"
+    echo ""
     
     # Pods
-    echo "  - Pods..."
-    kubectl get pods -n "$NAMESPACE" -l "ray.io/cluster=$name" -o json > "$resource_dir/pods.json" 2>/dev/null || echo '{"items":[]}' > "$resource_dir/pods.json"
-    
-    echo "  Resources saved to: $resource_dir/"
+    echo "Pods (ray.io/cluster=$name):"
+    local pods=$(kubectl get pods -n "$NAMESPACE" -l "ray.io/cluster=$name" -o jsonpath='{range .items[*]}{.metadata.name}{" ("}{.status.phase}{")"}{"\n"}{end}' 2>/dev/null || echo "(none)")
+    echo "  $pods"
 }
 
 # Process each RayCluster
@@ -211,24 +304,70 @@ for rc in $RAYCLUSTERS; do
     capture_related_resources "$rc"
 done
 
-# Create manifest file
-MANIFEST="$OUTPUT_DIR/manifest.txt"
-{
-    echo "Pre-Migration Check Manifest"
-    echo "Timestamp: $TIMESTAMP"
-    echo "Namespace: $NAMESPACE"
-    echo ""
-    echo "RayClusters captured:"
-    for rc in $RAYCLUSTERS; do
-        echo "  - $rc"
-    done
-} > "$MANIFEST"
-
+echo ""
+echo ""
+echo "############################################"
+echo "# SUMMARY"
+echo "############################################"
+echo ""
+echo "Timestamp: $TIMESTAMP"
+echo "Namespace: $NAMESPACE"
+echo ""
+echo "RayClusters checked:"
+for rc in $RAYCLUSTERS; do
+    echo "  - $rc"
+done
 echo ""
 echo "=============================================="
-echo "Pre-migration check complete!"
-echo "Output saved to: $OUTPUT_DIR"
+echo "CodeFlare-Operator Detection Summary:"
+echo "=============================================="
 echo ""
-echo "Files created:"
-ls -la "$OUTPUT_DIR"
+
+for rc in $RAYCLUSTERS; do
+    echo "--- $rc ---"
+    
+    # Check for CodeFlare finalizer
+    has_cf_finalizer=$(kubectl get raycluster "$rc" -n "$NAMESPACE" -o jsonpath='{.metadata.finalizers[*]}' 2>/dev/null | grep -c "ray.openshift.ai/oauth-finalizer" || echo "0")
+    
+    # Check for oauth-proxy sidecar
+    has_oauth_proxy=$(kubectl get raycluster "$rc" -n "$NAMESPACE" -o jsonpath='{.spec.headGroupSpec.template.spec.containers[*].name}' 2>/dev/null | grep -c "oauth-proxy" || echo "0")
+    
+    # Check for create-cert initContainer
+    has_create_cert=$(kubectl get raycluster "$rc" -n "$NAMESPACE" -o jsonpath='{.spec.headGroupSpec.template.spec.initContainers[*].name}' 2>/dev/null | grep -c "create-cert" || echo "0")
+    
+    # Check for RAY_USE_TLS env var
+    has_ray_tls=$(kubectl get raycluster "$rc" -n "$NAMESPACE" -o jsonpath='{.spec.headGroupSpec.template.spec.containers[0].env[*].name}' 2>/dev/null | grep -c "RAY_USE_TLS" || echo "0")
+    
+    # Check for ca-vol volume
+    has_ca_vol=$(kubectl get raycluster "$rc" -n "$NAMESPACE" -o jsonpath='{.spec.headGroupSpec.template.spec.volumes[*].name}' 2>/dev/null | grep -c "ca-vol" || echo "0")
+    
+    # Check for CodeFlare version annotation
+    has_cf_version=$(kubectl get raycluster "$rc" -n "$NAMESPACE" -o jsonpath='{.metadata.annotations.ray\.openshift\.ai/version}' 2>/dev/null | grep -c "." || echo "0")
+    
+    # Count CodeFlare items found
+    cf_count=0
+    [ "$has_cf_finalizer" -gt 0 ] && ((cf_count++)) || true
+    [ "$has_oauth_proxy" -gt 0 ] && ((cf_count++)) || true
+    [ "$has_create_cert" -gt 0 ] && ((cf_count++)) || true
+    [ "$has_ray_tls" -gt 0 ] && ((cf_count++)) || true
+    [ "$has_ca_vol" -gt 0 ] && ((cf_count++)) || true
+    [ "$has_cf_version" -gt 0 ] && ((cf_count++)) || true
+    
+    if [ "$cf_count" -gt 0 ]; then
+        echo "  STATUS: CODEFLARE-MANAGED (${cf_count}/6 indicators found)"
+        echo "  Items found:"
+        [ "$has_cf_finalizer" -gt 0 ] && echo "    ✓ ray.openshift.ai/oauth-finalizer"
+        [ "$has_cf_version" -gt 0 ] && echo "    ✓ ray.openshift.ai/version annotation"
+        [ "$has_oauth_proxy" -gt 0 ] && echo "    ✓ oauth-proxy sidecar"
+        [ "$has_create_cert" -gt 0 ] && echo "    ✓ create-cert initContainer"
+        [ "$has_ray_tls" -gt 0 ] && echo "    ✓ RAY_USE_TLS env vars"
+        [ "$has_ca_vol" -gt 0 ] && echo "    ✓ ca-vol/server-cert volumes"
+    else
+        echo "  STATUS: NOT CODEFLARE-MANAGED (migration will skip)"
+    fi
+    echo ""
+done
+
+echo "=============================================="
+echo "Pre-migration check complete!"
 echo "=============================================="
