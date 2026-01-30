@@ -70,58 +70,78 @@ The SDK generates clusters with these specific configurations that **must be pre
 7. **Default image**: `quay.io/modh/ray@sha256:...`
 8. **rayStartParams**: `block: "true"`, `num-gpus`, `resources`
 
-## Usage
+## Testing Methodology
 
-### 1. Setup Test Namespace
+The recommended approach for testing the migration is a real RHOAI upgrade scenario:
 
-```bash
-kubectl create namespace test-migration
+### RHOAI Upgrade Testing Flow
+
+```
+1. Install RHOAI 2.25 (includes codeflare-operator)
+2. Create RayClusters using codeflare-sdk
+   - codeflare-operator webhook automatically injects TLS/OAuth config
+   - codeflare-operator adds the finalizer (ray.openshift.ai/oauth-finalizer)
+3. Verify codeflare-operator configuration is present
+4. Upgrade to RHOAI 3.2
+   - Required for Gateway API configuration and other 3.x dependencies
+   - codeflare-operator is removed in RHOAI 3.x
+   - New KubeRay with migration logic takes over
+5. Validate migration:
+   - RayCluster suspends temporarily
+   - CodeFlare config removed (TLS env vars, oauth-proxy, create-cert, etc.)
+   - New KubeRay-owned mTLS/NetworkPolicy/Auth applied via Gateway API
 ```
 
-### 2. Apply Test RayClusters
+### Isolated KubeRay Testing (for development)
 
-```bash
-# Apply all test RayClusters
-kubectl apply -f testdata/ -n test-migration
+For isolated testing of just the KubeRay migration changes:
 
-# Or apply specific ones
-kubectl apply -f testdata/raycluster-codeflare-injected.yaml -n test-migration
+```
+1. Install RHOAI 2.25
+2. Create RayClusters using codeflare-sdk
+3. Set codeflare-operator and kuberay to "Unmanaged" in DSC
+4. Apply PR version of kuberay-operator via kustomize
+5. Validate migration behavior
 ```
 
-### 3. Run Pre-Migration Check
+Note: This approach may not fully test Gateway API integration.
 
-Before migration (or to capture current state):
+### Using Test Data Files
+
+The test data files in `testdata/` represent clusters AFTER codeflare-operator injection
+but WITHOUT the finalizer (since codeflare-operator adds it automatically).
+
+These files can be used as reference for what configurations should be preserved/removed.
+
+## Usage with Scripts
+
+### 1. Run Pre-Migration Check (before upgrade)
 
 ```bash
-./pre-migration-check.sh test-migration /tmp/migration-check/pre
+./pre-migration-check.sh <namespace> /tmp/migration-check/pre
 ```
 
-This captures:
+This captures the current state of RayClusters including:
 - Full RayCluster specs as JSON
 - Summary of containers, initContainers, env vars, volumes
 - Related resources (Services, Secrets, NetworkPolicies, etc.)
 
-### 4. Trigger Migration
+### 2. Perform RHOAI Upgrade
 
-The migration is triggered automatically when the KubeRay operator detects the `ray.openshift.ai/oauth-finalizer` on a RayCluster.
+Upgrade from RHOAI 2.25 to RHOAI 3.2 following standard upgrade procedures.
+The new KubeRay operator will automatically detect and migrate clusters with
+the codeflare-operator finalizer.
 
-If testing manually, you can add the finalizer:
-
-```bash
-kubectl patch raycluster <name> -n test-migration --type=merge -p '{"metadata":{"finalizers":["ray.openshift.ai/oauth-finalizer"]}}'
-```
-
-### 5. Run Post-Migration Check
-
-After migration completes:
+### 3. Run Post-Migration Check
 
 ```bash
-./post-migration-check.sh test-migration /tmp/migration-check/pre /tmp/migration-check/post
+./post-migration-check.sh <namespace> /tmp/migration-check/pre /tmp/migration-check/post
 ```
 
 This verifies:
-- CodeFlare items were removed
-- Custom items were preserved
+- CodeFlare finalizer was removed
+- CodeFlare items were removed (create-cert, oauth-proxy, TLS env vars, etc.)
+- SDK/User items were preserved (machine-learning container, ODH CA, custom configs)
 - Generates pass/fail report
 
 ### Example Output
@@ -131,15 +151,16 @@ This verifies:
 Post-Migration Check for RayClusters
 ==============================================
 
-Verifying RayCluster: raycluster-codeflare-injected
+Verifying RayCluster: my-ray-cluster
 [PASS] CodeFlare finalizer was removed
 [PASS] enableIngress was set to false
 [PASS] Head initContainer 'create-cert' was removed
-[PASS] Custom head initContainer 'data-prep' was preserved
 [PASS] Head container 'oauth-proxy' was removed
-[PASS] Custom head container 'fluentbit' was preserved
 [PASS] Head env var 'MY_POD_IP' was removed
-[PASS] Custom head env var 'MY_CUSTOM_VAR' was preserved
+[PASS] Head env var 'RAY_USE_TLS' was removed
+[PASS] Custom head env var 'RAY_USAGE_STATS_ENABLED' was preserved
+[PASS] Custom head volume 'odh-trusted-ca-cert' was preserved
+[PASS] Worker container 'machine-learning' was preserved
 ...
 
 ==============================================
@@ -182,60 +203,54 @@ Exit codes:
 
 ## Requirements
 
-- `kubectl` configured with cluster access
+- `oc` or `kubectl` configured with cluster access
 - `jq` for JSON processing
 - Bash 4.0+
-
-## CI Integration
-
-These scripts can be integrated into CI pipelines:
-
-```bash
-#!/bin/bash
-set -e
-
-# Setup
-kubectl create namespace test-migration || true
-kubectl apply -f testdata/ -n test-migration
-
-# Wait for RayClusters to be created
-sleep 10
-
-# Capture pre-migration state
-./pre-migration-check.sh test-migration /tmp/pre
-
-# Deploy new KubeRay operator (triggers migration)
-# ... deployment steps ...
-
-# Wait for migration to complete
-sleep 30
-
-# Verify migration
-./post-migration-check.sh test-migration /tmp/pre /tmp/post
-
-# Cleanup
-kubectl delete namespace test-migration
-```
 
 ## Troubleshooting
 
 ### Migration not triggered
 
-Check if the finalizer is present:
+Check if the codeflare-operator finalizer is present on the RayCluster:
 ```bash
-kubectl get raycluster <name> -n test-migration -o jsonpath='{.metadata.finalizers}'
+oc get raycluster <name> -n <namespace> -o jsonpath='{.metadata.finalizers}'
+# Should show: ["ray.openshift.ai/oauth-finalizer"]
 ```
 
-### Pods not restarting
+If the finalizer is missing, the cluster was not managed by codeflare-operator
+and migration will be skipped.
+
+### Cluster stuck in suspended state
 
 The migration uses suspend/unsuspend to trigger pod recreation. Check:
 ```bash
-kubectl get raycluster <name> -n test-migration -o jsonpath='{.spec.suspend}'
-kubectl get pods -n test-migration -l ray.io/cluster=<name>
+# Check suspend status
+oc get raycluster <name> -n <namespace> -o jsonpath='{.spec.suspend}'
+
+# Check for migration annotation
+oc get raycluster <name> -n <namespace> -o jsonpath='{.metadata.annotations.migration\.ray\.io/suspended-for-migration}'
+
+# Check pods
+oc get pods -n <namespace> -l ray.io/cluster=<name>
 ```
 
 ### Check migration events
 
 ```bash
-kubectl get events -n test-migration --field-selector involvedObject.name=<name>
+oc get events -n <namespace> --field-selector involvedObject.name=<name> | grep -E "(Migration|Suspend)"
+```
+
+### Verify KubeRay took over
+
+After migration, check for KubeRay-managed resources:
+```bash
+# Check for cert-manager certificates (KubeRay mTLS)
+oc get certificates -n <namespace> -l ray.io/cluster=<name>
+
+# Check for KubeRay NetworkPolicies
+oc get networkpolicies -n <namespace> -l ray.io/cluster=<name>
+
+# Check annotation was set
+oc get raycluster <name> -n <namespace> -o jsonpath='{.metadata.annotations.odh\.ray\.io/secure-trusted-network}'
+# Should show: true
 ```

@@ -1,5 +1,10 @@
 # RayCluster with CodeFlare-injected components that should be REMOVED after migration
 # This simulates a cluster that was managed by codeflare-operator
+#
+# NOTE: The finalizer (ray.openshift.ai/oauth-finalizer) is NOT included here because
+# codeflare-operator will automatically add it when the cluster is created in RHOAI 2.x.
+# This file represents what the cluster looks like AFTER codeflare-operator injection.
+#
 # After migration:
 # - initContainer "create-cert" should be REMOVED
 # - sidecar "oauth-proxy" should be REMOVED  
@@ -13,8 +18,7 @@ kind: RayCluster
 metadata:
   name: raycluster-codeflare-injected
   namespace: test-migration
-  finalizers:
-  - ray.openshift.ai/oauth-finalizer  # CodeFlare finalizer triggers migration
+  # NOTE: finalizer will be added by codeflare-operator webhook, not in user's YAML
 spec:
   rayVersion: '2.46.0'
   headGroupSpec:

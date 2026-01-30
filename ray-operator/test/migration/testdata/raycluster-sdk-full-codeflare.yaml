@@ -3,6 +3,10 @@
 #
 # Created with codeflare-sdk v0.31.x + codeflare-operator TLS/OAuth injections
 #
+# NOTE: The finalizer (ray.openshift.ai/oauth-finalizer) is NOT included here because
+# codeflare-operator will automatically add it when the cluster is created in RHOAI 2.x.
+# This file represents what the cluster looks like AFTER codeflare-operator injection.
+#
 # After migration:
 # - CodeFlare injections (create-cert, oauth-proxy, TLS env vars, etc.) -> REMOVED
 # - SDK configurations (machine-learning container, ODH CA, lifecycle, etc.) -> PRESERVED
@@ -19,8 +23,7 @@ metadata:
   annotations:
     app.kubernetes.io/managed-by: /user/notebook-name
     custom-annotation: custom-value
-  finalizers:
-  - ray.openshift.ai/oauth-finalizer  # CodeFlare finalizer triggers migration
+  # NOTE: finalizer will be added by codeflare-operator webhook, not in user's YAML
 spec:
   rayVersion: '2.47.1'
   enableInTreeAutoscaling: false
