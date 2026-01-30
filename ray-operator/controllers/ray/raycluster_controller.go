@@ -1742,6 +1742,10 @@ func (r *RayClusterReconciler) migrateFromCodeFlarePhase1(ctx context.Context, i
 	instance.Annotations[utils.EnableSecureTrustedNetworkAnnotationKey] = "true"
 	logger.Info("Added secure-trusted-network annotation to enable KubeRay controllers")
 
+	// Step 2b: Remove CodeFlare version annotation
+	delete(instance.Annotations, "ray.openshift.ai/version")
+	logger.Info("Removed CodeFlare version annotation")
+
 	// Step 3: Backup CodeFlare CA secret if it exists
 	oldCASecretName := fmt.Sprintf("ca-secret-%s", instance.Name)
 	oldCASecret := &corev1.Secret{}
@@ -1935,6 +1939,20 @@ func (r *RayClusterReconciler) cleanupCodeFlareOAuthResources(ctx context.Contex
 				logger.Error(err, "Failed to delete old ServiceAccount", "name", sa.Name)
 			} else {
 				logger.Info("Deleted old CodeFlare ServiceAccount", "name", sa.Name)
+			}
+		}
+	}
+
+	// Delete CodeFlare NetworkPolicies (KubeRay creates its own with different names)
+	netpolList := &networkingv1.NetworkPolicyList{}
+	if err := r.List(ctx, netpolList, codeflareLabels, client.InNamespace(instance.Namespace)); err != nil {
+		logger.Error(err, "Failed to list CodeFlare NetworkPolicies")
+	} else {
+		for _, netpol := range netpolList.Items {
+			if err := r.Delete(ctx, &netpol); err != nil && !errors.IsNotFound(err) {
+				logger.Error(err, "Failed to delete old NetworkPolicy", "name", netpol.Name)
+			} else {
+				logger.Info("Deleted old CodeFlare NetworkPolicy", "name", netpol.Name)
 			}
 		}
 	}
