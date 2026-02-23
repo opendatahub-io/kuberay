@@ -437,6 +437,7 @@ const (
 	CreatedRoleBinding        K8sEventType = "CreatedRoleBinding"
 	FailedToCreateRoleBinding K8sEventType = "FailedToCreateRoleBinding"
 
+<<<<<<< HEAD
 	// mTLS event list
 	MTLSPKIReady               K8sEventType = "MTLSPKIReady"
 	MTLSCertsNotReady          K8sEventType = "MTLSCertsNotReady"
@@ -447,4 +448,10 @@ const (
 	MTLSFailedToReconcile      K8sEventType = "MTLSFailedToReconcile"
 	MTLSCertificatesUpdated    K8sEventType = "MTLSCertificatesUpdated"
 	MTLSFailedToCleanupSecrets K8sEventType = "MTLSFailedToCleanupSecrets"
+=======
+	// NetworkPolicy event list
+	CreatedNetworkPolicy        K8sEventType = "CreatedNetworkPolicy"
+	DeletedNetworkPolicy        K8sEventType = "DeletedNetworkPolicy"
+	FailedToCreateNetworkPolicy K8sEventType = "FailedToCreateNetworkPolicy"
+>>>>>>> 7c081772 (feat(RHOAIENG-47878): Contribute NetworkPolicy feat upstream)
 )
