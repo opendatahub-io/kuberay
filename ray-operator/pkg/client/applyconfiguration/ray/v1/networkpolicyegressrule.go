@@ -9,14 +9,8 @@ import (
 // NetworkPolicyEgressRuleApplyConfiguration represents a declarative configuration of the NetworkPolicyEgressRule type for use
 // with apply.
 //
-// NetworkPolicyEgressRule wraps the native Kubernetes NetworkPolicyEgressRule
-// with optional metadata fields for debugging and documentation.
+// NetworkPolicyEgressRule wraps the native Kubernetes NetworkPolicyEgressRule.
 type NetworkPolicyEgressRuleApplyConfiguration struct {
-	// Name is an optional descriptive name for debugging and logging.
-	Name *string `json:"name,omitempty"`
-	// Description is an optional longer description for documentation purposes.
-	Description *string `json:"description,omitempty"`
-	// NetworkPolicyEgressRule embeds the native Kubernetes NetworkPolicyEgressRule type.
 	networkingv1.NetworkPolicyEgressRule `json:",inline"`
 }
 
@@ -24,22 +18,6 @@ type NetworkPolicyEgressRuleApplyConfiguration struct {
 // apply.
 func NetworkPolicyEgressRule() *NetworkPolicyEgressRuleApplyConfiguration {
 	return &NetworkPolicyEgressRuleApplyConfiguration{}
-}
-
-// WithName sets the Name field in the declarative configuration to the given value
-// and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the Name field is set to the value of the last call.
-func (b *NetworkPolicyEgressRuleApplyConfiguration) WithName(value string) *NetworkPolicyEgressRuleApplyConfiguration {
-	b.Name = &value
-	return b
-}
-
-// WithDescription sets the Description field in the declarative configuration to the given value
-// and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the Description field is set to the value of the last call.
-func (b *NetworkPolicyEgressRuleApplyConfiguration) WithDescription(value string) *NetworkPolicyEgressRuleApplyConfiguration {
-	b.Description = &value
-	return b
 }
 
 // WithPorts adds the given value to the Ports field in the declarative configuration

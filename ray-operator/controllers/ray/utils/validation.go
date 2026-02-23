@@ -296,14 +296,12 @@ func validateNetworkIsolation(spec *rayv1.RayClusterSpec) error {
 
 // isEmptyIngressRule returns true if the ingress rule has no meaningful content.
 func isEmptyIngressRule(rule rayv1.NetworkPolicyIngressRule) bool {
-	return rule.Name == "" && rule.Description == "" &&
-		len(rule.From) == 0 && len(rule.Ports) == 0
+	return len(rule.From) == 0 && len(rule.Ports) == 0
 }
 
 // isEmptyEgressRule returns true if the egress rule has no meaningful content.
 func isEmptyEgressRule(rule rayv1.NetworkPolicyEgressRule) bool {
-	return rule.Name == "" && rule.Description == "" &&
-		len(rule.To) == 0 && len(rule.Ports) == 0
+	return len(rule.To) == 0 && len(rule.Ports) == 0
 }
 
 // validateTLSOptions checks that the TLSOptions config is internally consistent.

@@ -150,33 +150,13 @@ type NetworkIsolationConfig struct {
 	EgressRules NetworkPolicyEgressRule `json:"egressRules,omitempty"`
 }
 
-// NetworkPolicyIngressRule wraps the native Kubernetes NetworkPolicyIngressRule
-// with optional metadata fields for debugging and documentation.
+// NetworkPolicyIngressRule wraps the native Kubernetes NetworkPolicyIngressRule.
 type NetworkPolicyIngressRule struct {
-	// Name is an optional descriptive name for debugging and logging.
-	// +optional
-	Name string `json:"name,omitempty"`
-
-	// Description is an optional longer description for documentation purposes.
-	// +optional
-	Description string `json:"description,omitempty"`
-
-	// NetworkPolicyIngressRule embeds the native Kubernetes NetworkPolicyIngressRule type.
 	networkingv1.NetworkPolicyIngressRule `json:",inline"`
 }
 
-// NetworkPolicyEgressRule wraps the native Kubernetes NetworkPolicyEgressRule
-// with optional metadata fields for debugging and documentation.
+// NetworkPolicyEgressRule wraps the native Kubernetes NetworkPolicyEgressRule.
 type NetworkPolicyEgressRule struct {
-	// Name is an optional descriptive name for debugging and logging.
-	// +optional
-	Name string `json:"name,omitempty"`
-
-	// Description is an optional longer description for documentation purposes.
-	// +optional
-	Description string `json:"description,omitempty"`
-
-	// NetworkPolicyEgressRule embeds the native Kubernetes NetworkPolicyEgressRule type.
 	networkingv1.NetworkPolicyEgressRule `json:",inline"`
 }
 

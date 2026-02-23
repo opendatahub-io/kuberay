@@ -4639,10 +4639,6 @@ spec:
                     properties:
                       egressRules:
                         properties:
-                          description:
-                            type: string
-                          name:
-                            type: string
                           ports:
                             items:
                               properties:
@@ -4732,8 +4728,6 @@ spec:
                         type: object
                       ingressRules:
                         properties:
-                          description:
-                            type: string
                           from:
                             items:
                               properties:
@@ -4804,8 +4798,6 @@ spec:
                               type: object
                             type: array
                             x-kubernetes-list-type: atomic
-                          name:
-                            type: string
                           ports:
                             items:
                               properties:

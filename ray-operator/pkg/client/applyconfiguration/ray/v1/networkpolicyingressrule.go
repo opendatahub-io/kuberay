@@ -9,14 +9,8 @@ import (
 // NetworkPolicyIngressRuleApplyConfiguration represents a declarative configuration of the NetworkPolicyIngressRule type for use
 // with apply.
 //
-// NetworkPolicyIngressRule wraps the native Kubernetes NetworkPolicyIngressRule
-// with optional metadata fields for debugging and documentation.
+// NetworkPolicyIngressRule wraps the native Kubernetes NetworkPolicyIngressRule.
 type NetworkPolicyIngressRuleApplyConfiguration struct {
-	// Name is an optional descriptive name for debugging and logging.
-	Name *string `json:"name,omitempty"`
-	// Description is an optional longer description for documentation purposes.
-	Description *string `json:"description,omitempty"`
-	// NetworkPolicyIngressRule embeds the native Kubernetes NetworkPolicyIngressRule type.
 	networkingv1.NetworkPolicyIngressRule `json:",inline"`
 }
 
@@ -24,22 +18,6 @@ type NetworkPolicyIngressRuleApplyConfiguration struct {
 // apply.
 func NetworkPolicyIngressRule() *NetworkPolicyIngressRuleApplyConfiguration {
 	return &NetworkPolicyIngressRuleApplyConfiguration{}
-}
-
-// WithName sets the Name field in the declarative configuration to the given value
-// and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the Name field is set to the value of the last call.
-func (b *NetworkPolicyIngressRuleApplyConfiguration) WithName(value string) *NetworkPolicyIngressRuleApplyConfiguration {
-	b.Name = &value
-	return b
-}
-
-// WithDescription sets the Description field in the declarative configuration to the given value
-// and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the Description field is set to the value of the last call.
-func (b *NetworkPolicyIngressRuleApplyConfiguration) WithDescription(value string) *NetworkPolicyIngressRuleApplyConfiguration {
-	b.Description = &value
-	return b
 }
 
 // WithPorts adds the given value to the Ports field in the declarative configuration
