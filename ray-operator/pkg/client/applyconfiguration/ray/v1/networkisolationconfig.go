@@ -15,9 +15,9 @@ type NetworkIsolationConfigApplyConfiguration struct {
 	// - "denyAllEgress": Denies all Egress.
 	Mode *string `json:"mode,omitempty"`
 	// IngressRules specifies custom ingress rules for the Ray head pod.
-	IngressRules *NetworkPolicyIngressRuleApplyConfiguration `json:"ingressRules,omitempty"`
+	IngressRules []NetworkPolicyIngressRuleApplyConfiguration `json:"ingressRules,omitempty"`
 	// EgressRules specifies custom egress rules for the Ray head pod.
-	EgressRules *NetworkPolicyEgressRuleApplyConfiguration `json:"egressRules,omitempty"`
+	EgressRules []NetworkPolicyEgressRuleApplyConfiguration `json:"egressRules,omitempty"`
 }
 
 // NetworkIsolationConfigApplyConfiguration constructs a declarative configuration of the NetworkIsolationConfig type for use with
@@ -34,18 +34,28 @@ func (b *NetworkIsolationConfigApplyConfiguration) WithMode(value string) *Netwo
 	return b
 }
 
-// WithIngressRules sets the IngressRules field in the declarative configuration to the given value
-// and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the IngressRules field is set to the value of the last call.
-func (b *NetworkIsolationConfigApplyConfiguration) WithIngressRules(value *NetworkPolicyIngressRuleApplyConfiguration) *NetworkIsolationConfigApplyConfiguration {
-	b.IngressRules = value
+// WithIngressRules adds the given value to the IngressRules field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the IngressRules field.
+func (b *NetworkIsolationConfigApplyConfiguration) WithIngressRules(values ...*NetworkPolicyIngressRuleApplyConfiguration) *NetworkIsolationConfigApplyConfiguration {
+	for i := range values {
+		if values[i] == nil {
+			panic("nil value passed to WithIngressRules")
+		}
+		b.IngressRules = append(b.IngressRules, *values[i])
+	}
 	return b
 }
 
-// WithEgressRules sets the EgressRules field in the declarative configuration to the given value
-// and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the EgressRules field is set to the value of the last call.
-func (b *NetworkIsolationConfigApplyConfiguration) WithEgressRules(value *NetworkPolicyEgressRuleApplyConfiguration) *NetworkIsolationConfigApplyConfiguration {
-	b.EgressRules = value
+// WithEgressRules adds the given value to the EgressRules field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the EgressRules field.
+func (b *NetworkIsolationConfigApplyConfiguration) WithEgressRules(values ...*NetworkPolicyEgressRuleApplyConfiguration) *NetworkIsolationConfigApplyConfiguration {
+	for i := range values {
+		if values[i] == nil {
+			panic("nil value passed to WithEgressRules")
+		}
+		b.EgressRules = append(b.EgressRules, *values[i])
+	}
 	return b
 }

@@ -143,11 +143,11 @@ type NetworkIsolationConfig struct {
 
 	// IngressRules specifies custom ingress rules for the Ray head pod.
 	// +optional
-	IngressRules NetworkPolicyIngressRule `json:"ingressRules,omitempty"`
+	IngressRules []NetworkPolicyIngressRule `json:"ingressRules,omitempty"`
 
 	// EgressRules specifies custom egress rules for the Ray head pod.
 	// +optional
-	EgressRules NetworkPolicyEgressRule `json:"egressRules,omitempty"`
+	EgressRules []NetworkPolicyEgressRule `json:"egressRules,omitempty"`
 }
 
 // NetworkPolicyIngressRule wraps the native Kubernetes NetworkPolicyIngressRule.

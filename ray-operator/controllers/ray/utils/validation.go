@@ -282,26 +282,16 @@ func validateNetworkIsolation(spec *rayv1.RayClusterSpec) error {
 	}
 
 	// Ingress rules are only meaningful when ingress is being denied.
-	if mode == rayv1.NetworkIsolationDenyAllEgress && !isEmptyIngressRule(ni.IngressRules) {
+	if mode == rayv1.NetworkIsolationDenyAllEgress && len(ni.IngressRules) > 0 {
 		return fmt.Errorf("networkIsolation.ingressRules cannot be set when mode is %q (ingress is not restricted)", mode)
 	}
 
 	// Egress rules are only meaningful when egress is being denied.
-	if mode == rayv1.NetworkIsolationDenyAllIngress && !isEmptyEgressRule(ni.EgressRules) {
+	if mode == rayv1.NetworkIsolationDenyAllIngress && len(ni.EgressRules) > 0 {
 		return fmt.Errorf("networkIsolation.egressRules cannot be set when mode is %q (egress is not restricted)", mode)
 	}
 
 	return nil
-}
-
-// isEmptyIngressRule returns true if the ingress rule has no meaningful content.
-func isEmptyIngressRule(rule rayv1.NetworkPolicyIngressRule) bool {
-	return len(rule.From) == 0 && len(rule.Ports) == 0
-}
-
-// isEmptyEgressRule returns true if the egress rule has no meaningful content.
-func isEmptyEgressRule(rule rayv1.NetworkPolicyEgressRule) bool {
-	return len(rule.To) == 0 && len(rule.Ports) == 0
 }
 
 // validateTLSOptions checks that the TLSOptions config is internally consistent.

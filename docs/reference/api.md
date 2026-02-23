@@ -281,8 +281,8 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `mode` _string_ | Mode controls the security level, all modes maintain the Cluster's<br />ability for intra-node and Kuberay operator communication.<br />- "denyAll": Denies all Ingress and Egress.<br />- "denyAllIngress": Denies all Ingress.<br />- "denyAllEgress": Denies all Egress. | denyAll | Enum: [denyAll denyAllIngress denyAllEgress] <br /> |
-| `ingressRules` _[NetworkPolicyIngressRule](#networkpolicyingressrule)_ | IngressRules specifies custom ingress rules for the Ray head pod. |  |  |
-| `egressRules` _[NetworkPolicyEgressRule](#networkpolicyegressrule)_ | EgressRules specifies custom egress rules for the Ray head pod. |  |  |
+| `ingressRules` _[NetworkPolicyIngressRule](#networkpolicyingressrule) array_ | IngressRules specifies custom ingress rules for the Ray head pod. |  |  |
+| `egressRules` _[NetworkPolicyEgressRule](#networkpolicyegressrule) array_ | EgressRules specifies custom egress rules for the Ray head pod. |  |  |
 
 
 #### NetworkPolicyEgressRule
