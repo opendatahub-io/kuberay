@@ -141,11 +141,11 @@ type NetworkIsolationConfig struct {
 	// +kubebuilder:default=denyAll
 	Mode *string `json:"mode,omitempty"`
 
-	// IngressRules specifies custom ingress rules for the Ray head pod.
+	// IngressRules specifies custom ingress rules for Ray cluster pods.
 	// +optional
 	IngressRules []NetworkPolicyIngressRule `json:"ingressRules,omitempty"`
 
-	// EgressRules specifies custom egress rules for the Ray head pod.
+	// EgressRules specifies custom egress rules for Ray cluster pods.
 	// +optional
 	EgressRules []NetworkPolicyEgressRule `json:"egressRules,omitempty"`
 }

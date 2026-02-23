@@ -319,6 +319,18 @@ func validateTLSOptions(spec *rayv1.RayClusterSpec) error {
 		}
 	}
 
+	// Also check worker group containers for the same env var conflict.
+	for i := range spec.WorkerGroupSpecs {
+		worker := &spec.WorkerGroupSpecs[i]
+		if len(worker.Template.Spec.Containers) > 0 {
+			workerContainer := worker.Template.Spec.Containers[RayContainerIndex]
+			if EnvVarExists(RAY_USE_TLS, workerContainer.Env) {
+				return fmt.Errorf("cannot set %s environment variable in worker group %q when tlsOptions is configured "+
+					"- the operator manages TLS configuration automatically", RAY_USE_TLS, worker.GroupName)
+			}
+		}
+	}
+
 	return nil
 }
 

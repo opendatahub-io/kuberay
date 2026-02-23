@@ -14,9 +14,9 @@ type NetworkIsolationConfigApplyConfiguration struct {
 	// - "denyAllIngress": Denies all Ingress.
 	// - "denyAllEgress": Denies all Egress.
 	Mode *string `json:"mode,omitempty"`
-	// IngressRules specifies custom ingress rules for the Ray head pod.
+	// IngressRules specifies custom ingress rules for Ray cluster pods.
 	IngressRules []NetworkPolicyIngressRuleApplyConfiguration `json:"ingressRules,omitempty"`
-	// EgressRules specifies custom egress rules for the Ray head pod.
+	// EgressRules specifies custom egress rules for Ray cluster pods.
 	EgressRules []NetworkPolicyEgressRuleApplyConfiguration `json:"egressRules,omitempty"`
 }
 
