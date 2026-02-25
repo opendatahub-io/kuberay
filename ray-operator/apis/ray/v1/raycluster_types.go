@@ -143,21 +143,11 @@ type NetworkIsolationConfig struct {
 
 	// IngressRules specifies custom ingress rules for Ray cluster pods.
 	// +optional
-	IngressRules []NetworkPolicyIngressRule `json:"ingressRules,omitempty"`
+	IngressRules []networkingv1.NetworkPolicyIngressRule `json:"ingressRules,omitempty"`
 
 	// EgressRules specifies custom egress rules for Ray cluster pods.
 	// +optional
-	EgressRules []NetworkPolicyEgressRule `json:"egressRules,omitempty"`
-}
-
-// NetworkPolicyIngressRule wraps the native Kubernetes NetworkPolicyIngressRule.
-type NetworkPolicyIngressRule struct {
-	networkingv1.NetworkPolicyIngressRule `json:",inline"`
-}
-
-// NetworkPolicyEgressRule wraps the native Kubernetes NetworkPolicyEgressRule.
-type NetworkPolicyEgressRule struct {
-	networkingv1.NetworkPolicyEgressRule `json:",inline"`
+	EgressRules []networkingv1.NetworkPolicyEgressRule `json:"egressRules,omitempty"`
 }
 
 // TLS mode constants for TLSOptions.Mode.

@@ -281,42 +281,8 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `mode` _string_ | Mode controls the security level, all modes maintain the Cluster's<br />ability for intra-node and Kuberay operator communication.<br />- "denyAll": Denies all Ingress and Egress.<br />- "denyAllIngress": Denies all Ingress.<br />- "denyAllEgress": Denies all Egress. | denyAll | Enum: [denyAll denyAllIngress denyAllEgress] <br /> |
-| `ingressRules` _[NetworkPolicyIngressRule](#networkpolicyingressrule) array_ | IngressRules specifies custom ingress rules for Ray cluster pods. |  |  |
-| `egressRules` _[NetworkPolicyEgressRule](#networkpolicyegressrule) array_ | EgressRules specifies custom egress rules for Ray cluster pods. |  |  |
-
-
-#### NetworkPolicyEgressRule
-
-
-
-NetworkPolicyEgressRule wraps the native Kubernetes NetworkPolicyEgressRule.
-
-
-
-_Appears in:_
-- [NetworkIsolationConfig](#networkisolationconfig)
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `ports` _[NetworkPolicyPort](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#networkpolicyport-v1-networking) array_ | ports is a list of destination ports for outgoing traffic.<br />Each item in this list is combined using a logical OR. If this field is<br />empty or missing, this rule matches all ports (traffic not restricted by port).<br />If this field is present and contains at least one item, then this rule allows<br />traffic only if the traffic matches at least one port in the list. |  |  |
-| `to` _[NetworkPolicyPeer](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#networkpolicypeer-v1-networking) array_ | to is a list of destinations for outgoing traffic of pods selected for this rule.<br />Items in this list are combined using a logical OR operation. If this field is<br />empty or missing, this rule matches all destinations (traffic not restricted by<br />destination). If this field is present and contains at least one item, this rule<br />allows traffic only if the traffic matches at least one item in the to list. |  |  |
-
-
-#### NetworkPolicyIngressRule
-
-
-
-NetworkPolicyIngressRule wraps the native Kubernetes NetworkPolicyIngressRule.
-
-
-
-_Appears in:_
-- [NetworkIsolationConfig](#networkisolationconfig)
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `ports` _[NetworkPolicyPort](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#networkpolicyport-v1-networking) array_ | ports is a list of ports which should be made accessible on the pods selected for<br />this rule. Each item in this list is combined using a logical OR. If this field is<br />empty or missing, this rule matches all ports (traffic not restricted by port).<br />If this field is present and contains at least one item, then this rule allows<br />traffic only if the traffic matches at least one port in the list. |  |  |
-| `from` _[NetworkPolicyPeer](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#networkpolicypeer-v1-networking) array_ | from is a list of sources which should be able to access the pods selected for this rule.<br />Items in this list are combined using a logical OR operation. If this field is<br />empty or missing, this rule matches all sources (traffic not restricted by<br />source). If this field is present and contains at least one item, this rule<br />allows traffic only if the traffic matches at least one item in the from list. |  |  |
+| `ingressRules` _[NetworkPolicyIngressRule](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#networkpolicyingressrule-v1-networking) array_ | IngressRules specifies custom ingress rules for Ray cluster pods. |  |  |
+| `egressRules` _[NetworkPolicyEgressRule](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#networkpolicyegressrule-v1-networking) array_ | EgressRules specifies custom egress rules for Ray cluster pods. |  |  |
 
 
 #### RayCluster
