@@ -2,6 +2,7 @@ package v1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -42,6 +43,16 @@ type RayClusterSpec struct {
 	// GcsFaultToleranceOptions for enabling GCS FT
 	// +optional
 	GcsFaultToleranceOptions *GcsFaultToleranceOptions `json:"gcsFaultToleranceOptions,omitempty"`
+	// NetworkIsolation specifies optional configuration for network isolation.
+	// When set, NetworkPolicies will be created to control traffic to/from Ray pods.
+	// The reconciler always ensures intra-cluster and KubeRay operator communication is permitted.
+	// +optional
+	NetworkIsolation *NetworkIsolationConfig `json:"networkIsolation,omitempty"`
+	// TLSOptions specifies optional TLS/mTLS encryption settings for Ray cluster communication.
+	// When set, the operator creates cert-manager resources and injects TLS configuration into pods.
+	// If omitted, TLS is disabled.
+	// +optional
+	TLSOptions *TLSOptions `json:"tlsOptions,omitempty"`
 	// HeadGroupSpec is the spec for the head pod
 	HeadGroupSpec HeadGroupSpec `json:"headGroupSpec"`
 	// RayVersion is used to determine the command for the Kubernetes Job managed by RayJob
@@ -105,6 +116,65 @@ type RedisCredential struct {
 	ValueFrom *corev1.EnvVarSource `json:"valueFrom,omitempty"`
 	// +optional
 	Value string `json:"value,omitempty"`
+}
+
+// Network isolation mode constants for NetworkIsolationConfig.Mode.
+const (
+	// NetworkIsolationDenyAll denies all ingress and egress traffic.
+	NetworkIsolationDenyAll = "denyAll"
+	// NetworkIsolationDenyAllIngress denies all ingress traffic.
+	NetworkIsolationDenyAllIngress = "denyAllIngress"
+	// NetworkIsolationDenyAllEgress denies all egress traffic.
+	NetworkIsolationDenyAllEgress = "denyAllEgress"
+)
+
+// NetworkIsolationConfig defines network isolation settings for Ray cluster.
+// All modes maintain the cluster's ability for intra-node and KubeRay operator communication.
+type NetworkIsolationConfig struct {
+	// Mode controls the security level, all modes maintain the Cluster's
+	// ability for intra-node and Kuberay operator communication.
+	// - "denyAll": Denies all Ingress and Egress.
+	// - "denyAllIngress": Denies all Ingress.
+	// - "denyAllEgress": Denies all Egress.
+	// +optional
+	// +kubebuilder:validation:Enum=denyAll;denyAllIngress;denyAllEgress
+	// +kubebuilder:default=denyAll
+	Mode *string `json:"mode,omitempty"`
+
+	// IngressRules specifies custom ingress rules for Ray cluster pods.
+	// +optional
+	IngressRules []networkingv1.NetworkPolicyIngressRule `json:"ingressRules,omitempty"`
+
+	// EgressRules specifies custom egress rules for Ray cluster pods.
+	// +optional
+	EgressRules []networkingv1.NetworkPolicyEgressRule `json:"egressRules,omitempty"`
+}
+
+// TLS mode constants for TLSOptions.Mode.
+const (
+	// TLSModeMutual enables mutual TLS (client and server authentication).
+	TLSModeMutual = "mTLS"
+	// TLSModeServerOnly enables standard TLS (server authentication only).
+	TLSModeServerOnly = "TLS"
+)
+
+// TLSOptions defines TLS/mTLS encryption settings for Ray cluster communication.
+// When present, the operator creates cert-manager resources and injects TLS environment
+// variables and volume mounts into Ray head and worker pods.
+type TLSOptions struct {
+	// Mode controls the security level.
+	// - "mTLS": Enables mTLS (Client & Server authentication).
+	// - "TLS": Enables standard TLS (Server authentication only).
+	// +optional
+	// +kubebuilder:validation:Enum=mTLS;TLS
+	// +kubebuilder:default=mTLS
+	Mode *string `json:"mode,omitempty"`
+
+	// SecretName allows "Bring Your Own Certificate".
+	// If set, the operator uses this secret for the CA/Cert.
+	// If empty, and (m)TLS is enabled, a self-signed CA is generated.
+	// +optional
+	SecretName *string `json:"secretName,omitempty"`
 }
 
 // HeadGroupSpec are the spec for the head pod

@@ -147,8 +147,15 @@ const (
 	RAY_USAGE_STATS_KUBERAY_IN_USE          = "RAY_USAGE_STATS_KUBERAY_IN_USE"
 	RAY_USAGE_STATS_EXTRA_TAGS              = "RAY_USAGE_STATS_EXTRA_TAGS"
 	RAYCLUSTER_DEFAULT_REQUEUE_SECONDS_ENV  = "RAYCLUSTER_DEFAULT_REQUEUE_SECONDS_ENV"
-	RAYCLUSTER_DEFAULT_REQUEUE_SECONDS      = 300
-	KUBERAY_GEN_RAY_START_CMD               = "KUBERAY_GEN_RAY_START_CMD"
+
+	RAYCLUSTER_DEFAULT_REQUEUE_SECONDS = 300
+	KUBERAY_GEN_RAY_START_CMD          = "KUBERAY_GEN_RAY_START_CMD"
+
+	// TLS-related environment variables for Ray. See: https://docs.ray.io/en/latest/ray-core/configure.html#tls-authentication
+	RAY_USE_TLS         = "RAY_USE_TLS"
+	RAY_TLS_SERVER_CERT = "RAY_TLS_SERVER_CERT"
+	RAY_TLS_SERVER_KEY  = "RAY_TLS_SERVER_KEY"
+	RAY_TLS_CA_CERT     = "RAY_TLS_CA_CERT"
 
 	// Environment variables for RayJob submitter Kubernetes Job.
 	// Example: ray job submit --address=http://$RAY_DASHBOARD_ADDRESS --submission-id=$RAY_JOB_SUBMISSION_ID ...

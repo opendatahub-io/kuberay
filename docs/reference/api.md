@@ -28,10 +28,6 @@ AuthMode describes the authentication mode for the Ray cluster.
 _Appears in:_
 - [AuthOptions](#authoptions)
 
-| Field | Description |
-| --- | --- |
-| `disabled` | AuthModeDisabled disables authentication.<br /> |
-| `token` | AuthModeToken enables token-based authentication.<br /> |
 
 
 #### AuthOptions
@@ -87,10 +83,6 @@ _Validation:_
 _Appears in:_
 - [AutoscalerOptions](#autoscaleroptions)
 
-| Field | Description |
-| --- | --- |
-| `v1` |  |
-| `v2` |  |
 
 
 #### ClusterUpgradeOptions
@@ -160,12 +152,6 @@ _Appears in:_
 - [DeletionPolicy](#deletionpolicy)
 - [DeletionRule](#deletionrule)
 
-| Field | Description |
-| --- | --- |
-| `DeleteCluster` |  |
-| `DeleteWorkers` |  |
-| `DeleteSelf` |  |
-| `DeleteNone` |  |
 
 
 #### DeletionRule
@@ -193,14 +179,17 @@ _Appears in:_
 DeletionStrategy configures automated cleanup after the RayJob reaches a terminal state.
 Two mutually exclusive styles are supported:
 
+
 	Legacy: provide both onSuccess and onFailure (deprecated; removal planned for 1.6.0). May be combined with shutdownAfterJobFinishes and (optionally) global TTLSecondsAfterFinished.
 	Rules: provide deletionRules (non-empty list). Rules mode is incompatible with shutdownAfterJobFinishes, legacy fields, and the global TTLSecondsAfterFinished (use per‑rule condition.ttlSeconds instead).
+
 
 Semantics:
   - A non-empty deletionRules selects rules mode; empty lists are treated as unset.
   - Legacy requires both onSuccess and onFailure; specifying only one is invalid.
   - Global TTLSecondsAfterFinished > 0 requires shutdownAfterJobFinishes=true; therefore it cannot be used with rules mode or with legacy alone (no shutdown).
   - Feature gate RayJobDeletionPolicy must be enabled when this block is present.
+
 
 Validation:
   - CRD XValidations prevent mixing legacy fields with deletionRules and enforce legacy completeness.
@@ -275,12 +264,25 @@ _Underlying type:_ _string_
 _Appears in:_
 - [RayJobSpec](#rayjobspec)
 
-| Field | Description |
-| --- | --- |
-| `K8sJobMode` |  |
-| `HTTPMode` |  |
-| `InteractiveMode` |  |
-| `SidecarMode` |  |
+
+
+#### NetworkIsolationConfig
+
+
+
+NetworkIsolationConfig defines network isolation settings for Ray cluster.
+All modes maintain the cluster's ability for intra-node and KubeRay operator communication.
+
+
+
+_Appears in:_
+- [RayClusterSpec](#rayclusterspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `mode` _string_ | Mode controls the security level, all modes maintain the Cluster's<br />ability for intra-node and Kuberay operator communication.<br />- "denyAll": Denies all Ingress and Egress.<br />- "denyAllIngress": Denies all Ingress.<br />- "denyAllEgress": Denies all Egress. | denyAll | Enum: [denyAll denyAllIngress denyAllEgress] <br /> |
+| `ingressRules` _[NetworkPolicyIngressRule](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#networkpolicyingressrule-v1-networking) array_ | IngressRules specifies custom ingress rules for Ray cluster pods. |  |  |
+| `egressRules` _[NetworkPolicyEgressRule](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#networkpolicyegressrule-v1-networking) array_ | EgressRules specifies custom egress rules for Ray cluster pods. |  |  |
 
 
 #### RayCluster
@@ -326,6 +328,8 @@ _Appears in:_
 | `headServiceAnnotations` _object (keys:string, values:string)_ |  |  |  |
 | `enableInTreeAutoscaling` _boolean_ | EnableInTreeAutoscaling indicates whether operator should create in tree autoscaling configs |  |  |
 | `gcsFaultToleranceOptions` _[GcsFaultToleranceOptions](#gcsfaulttoleranceoptions)_ | GcsFaultToleranceOptions for enabling GCS FT |  |  |
+| `networkIsolation` _[NetworkIsolationConfig](#networkisolationconfig)_ | NetworkIsolation specifies optional configuration for network isolation.<br />When set, NetworkPolicies will be created to control traffic to/from Ray pods.<br />The reconciler always ensures intra-cluster and KubeRay operator communication is permitted. |  |  |
+| `tlsOptions` _[TLSOptions](#tlsoptions)_ | TLSOptions specifies optional TLS/mTLS encryption settings for Ray cluster communication.<br />When set, the operator creates cert-manager resources and injects TLS configuration into pods.<br />If omitted, TLS is disabled. |  |  |
 | `headGroupSpec` _[HeadGroupSpec](#headgroupspec)_ | HeadGroupSpec is the spec for the head pod |  |  |
 | `rayVersion` _string_ | RayVersion is used to determine the command for the Kubernetes Job managed by RayJob |  |  |
 | `workerGroupSpecs` _[WorkerGroupSpec](#workergroupspec) array_ | WorkerGroupSpecs are the specs for the worker pods |  |  |
@@ -359,10 +363,6 @@ _Validation:_
 _Appears in:_
 - [RayClusterUpgradeStrategy](#rayclusterupgradestrategy)
 
-| Field | Description |
-| --- | --- |
-| `Recreate` | During upgrade, Recreate strategy will delete all existing pods before creating new ones<br /> |
-| `None` | No new pod will be created while the strategy is set to None<br /> |
 
 
 #### RayCronJob
@@ -534,11 +534,6 @@ _Underlying type:_ _string_
 _Appears in:_
 - [RayServiceUpgradeStrategy](#rayserviceupgradestrategy)
 
-| Field | Description |
-| --- | --- |
-| `NewClusterWithIncrementalUpgrade` | During upgrade, NewClusterWithIncrementalUpgrade strategy will create an upgraded cluster to gradually scale<br />and migrate traffic to using Gateway API.<br /> |
-| `NewCluster` | During upgrade, NewCluster strategy will create new upgraded cluster and switch to it when it becomes ready<br /> |
-| `None` | No new cluster will be created while the strategy is set to None<br /> |
 
 
 #### RedisCredential
@@ -588,6 +583,25 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `backoffLimit` _integer_ | BackoffLimit of the submitter k8s job. |  |  |
+
+
+#### TLSOptions
+
+
+
+TLSOptions defines TLS/mTLS encryption settings for Ray cluster communication.
+When present, the operator creates cert-manager resources and injects TLS environment
+variables and volume mounts into Ray head and worker pods.
+
+
+
+_Appears in:_
+- [RayClusterSpec](#rayclusterspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `mode` _string_ | Mode controls the security level.<br />- "mTLS": Enables mTLS (Client & Server authentication).<br />- "TLS": Enables standard TLS (Server authentication only). | mTLS | Enum: [mTLS TLS] <br /> |
+| `secretName` _string_ | SecretName allows "Bring Your Own Certificate".<br />If set, the operator uses this secret for the CA/Cert.<br />If empty, and (m)TLS is enabled, a self-signed CA is generated. |  |  |
 
 
 #### UpscalingMode

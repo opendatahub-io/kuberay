@@ -253,6 +253,84 @@ func ValidateRayClusterSpec(spec *rayv1.RayClusterSpec, annotations map[string]s
 
 	}
 
+	// Validate NetworkIsolation configuration if set.
+	if err := validateNetworkIsolation(spec); err != nil {
+		return err
+	}
+
+	// Validate TLSOptions configuration if set.
+	if err := validateTLSOptions(spec); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateNetworkIsolation checks that the NetworkIsolation config is internally consistent.
+// For example, ingress rules should only be specified when ingress is being denied,
+// and egress rules should only be specified when egress is being denied.
+func validateNetworkIsolation(spec *rayv1.RayClusterSpec) error {
+	ni := spec.NetworkIsolation
+	if ni == nil {
+		return nil
+	}
+
+	// Resolve mode, defaulting to denyAll if not set (matches kubebuilder default).
+	mode := rayv1.NetworkIsolationDenyAll
+	if ni.Mode != nil {
+		mode = *ni.Mode
+	}
+
+	// Ingress rules are only meaningful when ingress is being denied.
+	if mode == rayv1.NetworkIsolationDenyAllEgress && len(ni.IngressRules) > 0 {
+		return fmt.Errorf("networkIsolation.ingressRules cannot be set when mode is %q (ingress is not restricted)", mode)
+	}
+
+	// Egress rules are only meaningful when egress is being denied.
+	if mode == rayv1.NetworkIsolationDenyAllIngress && len(ni.EgressRules) > 0 {
+		return fmt.Errorf("networkIsolation.egressRules cannot be set when mode is %q (egress is not restricted)", mode)
+	}
+
+	return nil
+}
+
+// validateTLSOptions checks that the TLSOptions config is internally consistent.
+// It prevents users from setting TLS environment variables manually when TLSOptions is enabled,
+// and validates that the secret name (if provided) is a valid Kubernetes name.
+func validateTLSOptions(spec *rayv1.RayClusterSpec) error {
+	tls := spec.TLSOptions
+	if tls == nil {
+		return nil
+	}
+
+	// Validate SecretName is a valid Kubernetes resource name if provided.
+	if tls.SecretName != nil && *tls.SecretName != "" {
+		if errs := validation.IsDNS1123Subdomain(*tls.SecretName); len(errs) > 0 {
+			return fmt.Errorf("tlsOptions.secretName %q is not a valid Kubernetes resource name: %v", *tls.SecretName, errs)
+		}
+	}
+
+	// Prevent conflict: user should not set RAY_USE_TLS env var manually when TLSOptions is configured.
+	if len(spec.HeadGroupSpec.Template.Spec.Containers) > 0 {
+		headContainer := spec.HeadGroupSpec.Template.Spec.Containers[RayContainerIndex]
+		if EnvVarExists(RAY_USE_TLS, headContainer.Env) {
+			return fmt.Errorf("cannot set %s environment variable in head Pod when tlsOptions is configured "+
+				"- the operator manages TLS configuration automatically", RAY_USE_TLS)
+		}
+	}
+
+	// Also check worker group containers for the same env var conflict.
+	for i := range spec.WorkerGroupSpecs {
+		worker := &spec.WorkerGroupSpecs[i]
+		if len(worker.Template.Spec.Containers) > 0 {
+			workerContainer := worker.Template.Spec.Containers[RayContainerIndex]
+			if EnvVarExists(RAY_USE_TLS, workerContainer.Env) {
+				return fmt.Errorf("cannot set %s environment variable in worker group %q when tlsOptions is configured "+
+					"- the operator manages TLS configuration automatically", RAY_USE_TLS, worker.GroupName)
+			}
+		}
+	}
+
 	return nil
 }
 
