@@ -304,25 +304,6 @@ _Appears in:_
 | `egressRules` _[NetworkPolicyEgressRule](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#networkpolicyegressrule-v1-networking) array_ | EgressRules specifies custom egress rules for Ray cluster pods. |  |  |
 
 
-#### NetworkIsolationConfig
-
-
-
-NetworkIsolationConfig defines network isolation settings for Ray cluster.
-All modes maintain the cluster's ability for intra-cluster and KubeRay operator communication.
-
-
-
-_Appears in:_
-- [RayClusterSpec](#rayclusterspec)
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `mode` _string_ | Mode controls the security level. All modes maintain intra-cluster communication<br />and allow KubeRay operator access. Additional rules can be specified via IngressRules/EgressRules.<br />- "denyAll": Denies all ingress and egress except intra-cluster + operator<br />- "denyAllIngress": Denies ingress except intra-cluster + operator, allows all egress<br />- "denyAllEgress": Allows all ingress, denies egress except intra-cluster + operator | denyAll | Enum: [denyAll denyAllIngress denyAllEgress] <br /> |
-| `ingressRules` _[NetworkPolicyIngressRule](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#networkpolicyingressrule-v1-networking) array_ | IngressRules specifies additional custom ingress rules beyond the base mode.<br />These rules are appended to the default rules created by the Mode setting. |  |  |
-| `egressRules` _[NetworkPolicyEgressRule](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#networkpolicyegressrule-v1-networking) array_ | EgressRules specifies additional custom egress rules beyond the base mode.<br />These rules are appended to the default rules created by the Mode setting. |  |  |
-
-
 #### RayCluster
 
 
@@ -372,7 +353,6 @@ _Appears in:_
 | `headGroupSpec` _[HeadGroupSpec](#headgroupspec)_ | HeadGroupSpec is the spec for the head pod |  |  |
 | `rayVersion` _string_ | RayVersion is used to determine the command for the Kubernetes Job managed by RayJob |  |  |
 | `workerGroupSpecs` _[WorkerGroupSpec](#workergroupspec) array_ | WorkerGroupSpecs are the specs for the worker pods |  |  |
-| `networkIsolation` _[NetworkIsolationConfig](#networkisolationconfig)_ | NetworkIsolation specifies optional configuration for network isolation.<br />When enabled, NetworkPolicies will be created to control ingress/egress traffic to Ray pods. |  |  |
 
 
 #### RayClusterUpgradeStrategy

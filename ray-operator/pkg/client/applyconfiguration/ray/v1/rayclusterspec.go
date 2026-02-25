@@ -48,9 +48,6 @@ type RayClusterSpecApplyConfiguration struct {
 	RayVersion *string `json:"rayVersion,omitempty"`
 	// WorkerGroupSpecs are the specs for the worker pods
 	WorkerGroupSpecs []WorkerGroupSpecApplyConfiguration `json:"workerGroupSpecs,omitempty"`
-	// NetworkIsolation specifies optional configuration for network isolation.
-	// When enabled, NetworkPolicies will be created to control ingress/egress traffic to Ray pods.
-	NetworkIsolation *NetworkIsolationConfigApplyConfiguration `json:"networkIsolation,omitempty"`
 }
 
 // RayClusterSpecApplyConfiguration constructs a declarative configuration of the RayClusterSpec type for use with
@@ -179,13 +176,5 @@ func (b *RayClusterSpecApplyConfiguration) WithWorkerGroupSpecs(values ...*Worke
 		}
 		b.WorkerGroupSpecs = append(b.WorkerGroupSpecs, *values[i])
 	}
-	return b
-}
-
-// WithNetworkIsolation sets the NetworkIsolation field in the declarative configuration to the given value
-// and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the NetworkIsolation field is set to the value of the last call.
-func (b *RayClusterSpecApplyConfiguration) WithNetworkIsolation(value *NetworkIsolationConfigApplyConfiguration) *RayClusterSpecApplyConfiguration {
-	b.NetworkIsolation = value
 	return b
 }
