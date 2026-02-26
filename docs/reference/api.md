@@ -266,6 +266,25 @@ _Appears in:_
 
 
 
+#### MTLSOptions
+
+
+
+MTLSOptions configures Bring Your Own Certificate (BYOC) for mTLS.
+When enableMTLS is true and MTLSOptions is nil, the operator auto-generates
+certificates via cert-manager. When MTLSOptions is set with a CertificateSecretName,
+the operator uses the user-provided secret and does not require cert-manager.
+
+
+
+_Appears in:_
+- [RayClusterSpec](#rayclusterspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `certificateSecretName` _string_ | CertificateSecretName is a user-provided Kubernetes Secret containing<br />tls.crt, tls.key, and ca.crt. Used by both head and worker nodes.<br />The certificate SANs must cover all Ray node identities<br />(head service DNS, worker service DNS, pod IPs or wildcards).<br />When set, the operator skips cert-manager PKI and mounts this secret directly. |  |  |
+
+
 #### NetworkIsolationConfig
 
 
@@ -329,7 +348,8 @@ _Appears in:_
 | `enableInTreeAutoscaling` _boolean_ | EnableInTreeAutoscaling indicates whether operator should create in tree autoscaling configs |  |  |
 | `gcsFaultToleranceOptions` _[GcsFaultToleranceOptions](#gcsfaulttoleranceoptions)_ | GcsFaultToleranceOptions for enabling GCS FT |  |  |
 | `networkIsolation` _[NetworkIsolationConfig](#networkisolationconfig)_ | NetworkIsolation specifies optional configuration for network isolation.<br />When set, NetworkPolicies will be created to control traffic to/from Ray pods.<br />The reconciler always ensures intra-cluster and KubeRay operator communication is permitted. |  |  |
-| `tlsOptions` _[TLSOptions](#tlsoptions)_ | TLSOptions specifies optional TLS/mTLS encryption settings for Ray cluster communication.<br />When set, the operator creates cert-manager resources and injects TLS configuration into pods.<br />If omitted, TLS is disabled. |  |  |
+| `enableMTLS` _boolean_ | EnableMTLS enables mutual TLS (mTLS) encryption for Ray cluster internal communication.<br />When true and MTLSOptions is nil, the operator auto-generates certificates via cert-manager.<br />When true and MTLSOptions.CertificateSecretName is set, the operator uses the user-provided<br />secret (BYOC mode) and does not require cert-manager. |  |  |
+| `mTLSOptions` _[MTLSOptions](#mtlsoptions)_ | MTLSOptions configures Bring Your Own Certificate (BYOC) for mTLS.<br />Only used when enableMTLS is true. If nil, certificates are auto-generated via cert-manager. |  |  |
 | `headGroupSpec` _[HeadGroupSpec](#headgroupspec)_ | HeadGroupSpec is the spec for the head pod |  |  |
 | `rayVersion` _string_ | RayVersion is used to determine the command for the Kubernetes Job managed by RayJob |  |  |
 | `workerGroupSpecs` _[WorkerGroupSpec](#workergroupspec) array_ | WorkerGroupSpecs are the specs for the worker pods |  |  |
@@ -583,25 +603,6 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `backoffLimit` _integer_ | BackoffLimit of the submitter k8s job. |  |  |
-
-
-#### TLSOptions
-
-
-
-TLSOptions defines TLS/mTLS encryption settings for Ray cluster communication.
-When present, the operator creates cert-manager resources and injects TLS environment
-variables and volume mounts into Ray head and worker pods.
-
-
-
-_Appears in:_
-- [RayClusterSpec](#rayclusterspec)
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `mode` _string_ | Mode controls the security level.<br />- "mTLS": Enables mTLS (Client & Server authentication).<br />- "TLS": Enables standard TLS (Server authentication only). | mTLS | Enum: [mTLS TLS] <br /> |
-| `secretName` _string_ | SecretName allows "Bring Your Own Certificate".<br />If set, the operator uses this secret for the CA/Cert.<br />If empty, and (m)TLS is enabled, a self-signed CA is generated. |  |  |
 
 
 #### UpscalingMode

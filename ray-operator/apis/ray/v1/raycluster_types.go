@@ -48,11 +48,16 @@ type RayClusterSpec struct {
 	// The reconciler always ensures intra-cluster and KubeRay operator communication is permitted.
 	// +optional
 	NetworkIsolation *NetworkIsolationConfig `json:"networkIsolation,omitempty"`
-	// TLSOptions specifies optional TLS/mTLS encryption settings for Ray cluster communication.
-	// When set, the operator creates cert-manager resources and injects TLS configuration into pods.
-	// If omitted, TLS is disabled.
+	// EnableMTLS enables mutual TLS (mTLS) encryption for Ray cluster internal communication.
+	// When true and MTLSOptions is nil, the operator auto-generates certificates via cert-manager.
+	// When true and MTLSOptions.CertificateSecretName is set, the operator uses the user-provided
+	// secret (BYOC mode) and does not require cert-manager.
 	// +optional
-	TLSOptions *TLSOptions `json:"tlsOptions,omitempty"`
+	EnableMTLS *bool `json:"enableMTLS,omitempty"`
+	// MTLSOptions configures Bring Your Own Certificate (BYOC) for mTLS.
+	// Only used when enableMTLS is true. If nil, certificates are auto-generated via cert-manager.
+	// +optional
+	MTLSOptions *MTLSOptions `json:"mTLSOptions,omitempty"`
 	// HeadGroupSpec is the spec for the head pod
 	HeadGroupSpec HeadGroupSpec `json:"headGroupSpec"`
 	// RayVersion is used to determine the command for the Kubernetes Job managed by RayJob
@@ -61,6 +66,20 @@ type RayClusterSpec struct {
 	// WorkerGroupSpecs are the specs for the worker pods
 	// +optional
 	WorkerGroupSpecs []WorkerGroupSpec `json:"workerGroupSpecs,omitempty"`
+}
+
+// MTLSOptions configures Bring Your Own Certificate (BYOC) for mTLS.
+// When enableMTLS is true and MTLSOptions is nil, the operator auto-generates
+// certificates via cert-manager. When MTLSOptions is set with a CertificateSecretName,
+// the operator uses the user-provided secret and does not require cert-manager.
+type MTLSOptions struct {
+	// CertificateSecretName is a user-provided Kubernetes Secret containing
+	// tls.crt, tls.key, and ca.crt. Used by both head and worker nodes.
+	// The certificate SANs must cover all Ray node identities
+	// (head service DNS, worker service DNS, pod IPs or wildcards).
+	// When set, the operator skips cert-manager PKI and mounts this secret directly.
+	// +optional
+	CertificateSecretName *string `json:"certificateSecretName,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Recreate;None
@@ -148,33 +167,6 @@ type NetworkIsolationConfig struct {
 	// EgressRules specifies custom egress rules for Ray cluster pods.
 	// +optional
 	EgressRules []networkingv1.NetworkPolicyEgressRule `json:"egressRules,omitempty"`
-}
-
-// TLS mode constants for TLSOptions.Mode.
-const (
-	// TLSModeMutual enables mutual TLS (client and server authentication).
-	TLSModeMutual = "mTLS"
-	// TLSModeServerOnly enables standard TLS (server authentication only).
-	TLSModeServerOnly = "TLS"
-)
-
-// TLSOptions defines TLS/mTLS encryption settings for Ray cluster communication.
-// When present, the operator creates cert-manager resources and injects TLS environment
-// variables and volume mounts into Ray head and worker pods.
-type TLSOptions struct {
-	// Mode controls the security level.
-	// - "mTLS": Enables mTLS (Client & Server authentication).
-	// - "TLS": Enables standard TLS (Server authentication only).
-	// +optional
-	// +kubebuilder:validation:Enum=mTLS;TLS
-	// +kubebuilder:default=mTLS
-	Mode *string `json:"mode,omitempty"`
-
-	// SecretName allows "Bring Your Own Certificate".
-	// If set, the operator uses this secret for the CA/Cert.
-	// If empty, and (m)TLS is enabled, a self-signed CA is generated.
-	// +optional
-	SecretName *string `json:"secretName,omitempty"`
 }
 
 // HeadGroupSpec are the spec for the head pod
