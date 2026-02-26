@@ -258,8 +258,8 @@ func ValidateRayClusterSpec(spec *rayv1.RayClusterSpec, annotations map[string]s
 		return err
 	}
 
-	// Validate TLSOptions configuration if set.
-	if err := validateTLSOptions(spec); err != nil {
+	// Validate mTLS configuration if set.
+	if err := validateMTLSOptions(spec); err != nil {
 		return err
 	}
 
@@ -294,27 +294,30 @@ func validateNetworkIsolation(spec *rayv1.RayClusterSpec) error {
 	return nil
 }
 
-// validateTLSOptions checks that the TLSOptions config is internally consistent.
-// It prevents users from setting TLS environment variables manually when TLSOptions is enabled,
-// and validates that the secret name (if provided) is a valid Kubernetes name.
-func validateTLSOptions(spec *rayv1.RayClusterSpec) error {
-	tls := spec.TLSOptions
-	if tls == nil {
+// validateMTLSOptions checks that the mTLS config is internally consistent.
+// It prevents users from setting TLS environment variables manually when mTLS is enabled,
+// and validates MTLSOptions if provided.
+func validateMTLSOptions(spec *rayv1.RayClusterSpec) error {
+	if !IsMTLSEnabled(spec) {
+		// MTLSOptions should not be set when mTLS is disabled.
+		if spec.MTLSOptions != nil {
+			return fmt.Errorf("mTLSOptions cannot be set when enableMTLS is not true")
+		}
 		return nil
 	}
 
-	// Validate SecretName is a valid Kubernetes resource name if provided.
-	if tls.SecretName != nil && *tls.SecretName != "" {
-		if errs := validation.IsDNS1123Subdomain(*tls.SecretName); len(errs) > 0 {
-			return fmt.Errorf("tlsOptions.secretName %q is not a valid Kubernetes resource name: %v", *tls.SecretName, errs)
+	// Validate MTLSOptions if provided: CertificateSecretName must be non-empty.
+	if spec.MTLSOptions != nil {
+		if spec.MTLSOptions.CertificateSecretName == nil || *spec.MTLSOptions.CertificateSecretName == "" {
+			return fmt.Errorf("mTLSOptions.certificateSecretName must be provided when mTLSOptions is set")
 		}
 	}
 
-	// Prevent conflict: user should not set RAY_USE_TLS env var manually when TLSOptions is configured.
+	// Prevent conflict: user should not set RAY_USE_TLS env var manually when mTLS is enabled.
 	if len(spec.HeadGroupSpec.Template.Spec.Containers) > 0 {
 		headContainer := spec.HeadGroupSpec.Template.Spec.Containers[RayContainerIndex]
 		if EnvVarExists(RAY_USE_TLS, headContainer.Env) {
-			return fmt.Errorf("cannot set %s environment variable in head Pod when tlsOptions is configured "+
+			return fmt.Errorf("cannot set %s environment variable in head Pod when enableMTLS is true "+
 				"- the operator manages TLS configuration automatically", RAY_USE_TLS)
 		}
 	}
@@ -325,7 +328,7 @@ func validateTLSOptions(spec *rayv1.RayClusterSpec) error {
 		if len(worker.Template.Spec.Containers) > 0 {
 			workerContainer := worker.Template.Spec.Containers[RayContainerIndex]
 			if EnvVarExists(RAY_USE_TLS, workerContainer.Env) {
-				return fmt.Errorf("cannot set %s environment variable in worker group %q when tlsOptions is configured "+
+				return fmt.Errorf("cannot set %s environment variable in worker group %q when enableMTLS is true "+
 					"- the operator manages TLS configuration automatically", RAY_USE_TLS, worker.GroupName)
 			}
 		}
