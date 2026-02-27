@@ -3,7 +3,6 @@ package ray
 import (
 	"context"
 	"fmt"
-	"os"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -71,9 +70,6 @@ func (r *NetworkPolicyController) Reconcile(ctx context.Context, req ctrl.Reques
 
 	logger.Info("Reconciling NetworkPolicies for RayCluster", "cluster", instance.Name)
 
-	// Get KubeRay operator namespace
-	operatorNamespace := r.getOperatorNamespace()
-
 	// Determine mode (default to denyAll)
 	mode := rayv1.NetworkIsolationDenyAll
 	if instance.Spec.NetworkIsolation.Mode != nil {
@@ -81,7 +77,7 @@ func (r *NetworkPolicyController) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	// Create or update head NetworkPolicy
-	headNetworkPolicy := r.buildHeadNetworkPolicy(instance, operatorNamespace, mode)
+	headNetworkPolicy := r.buildHeadNetworkPolicy(instance, mode)
 	if err := r.createOrUpdateNetworkPolicy(ctx, instance, headNetworkPolicy); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -145,7 +141,7 @@ func (r *NetworkPolicyController) createOrUpdateNetworkPolicy(ctx context.Contex
 }
 
 // buildHeadNetworkPolicy creates a NetworkPolicy for Ray head pods
-func (r *NetworkPolicyController) buildHeadNetworkPolicy(instance *rayv1.RayCluster, operatorNamespace string, mode string) *networkingv1.NetworkPolicy {
+func (r *NetworkPolicyController) buildHeadNetworkPolicy(instance *rayv1.RayCluster, mode string) *networkingv1.NetworkPolicy {
 	labels := map[string]string{
 		utils.RayClusterLabelKey:                instance.Name,
 		utils.KubernetesApplicationNameLabelKey: utils.ApplicationName,
@@ -153,7 +149,7 @@ func (r *NetworkPolicyController) buildHeadNetworkPolicy(instance *rayv1.RayClus
 	}
 
 	// Build base ingress rules
-	ingressRules := r.buildBaseIngressRules(instance, operatorNamespace)
+	ingressRules := r.buildBaseIngressRules(instance)
 
 	// Append custom ingress rules if provided
 	ingressRules = append(ingressRules, instance.Spec.NetworkIsolation.IngressRules...)
@@ -254,7 +250,7 @@ func (r *NetworkPolicyController) buildWorkerNetworkPolicy(instance *rayv1.RayCl
 // buildBaseIngressRules creates base ingress rules based on mode.
 // Dashboard and client ports are resolved from the head container spec so that
 // clusters with custom ports are handled correctly without user intervention.
-func (r *NetworkPolicyController) buildBaseIngressRules(instance *rayv1.RayCluster, operatorNamespace string) []networkingv1.NetworkPolicyIngressRule {
+func (r *NetworkPolicyController) buildBaseIngressRules(instance *rayv1.RayCluster) []networkingv1.NetworkPolicyIngressRule {
 	tcpProtocol := corev1.ProtocolTCP
 
 	dashboardPort := intstr.FromInt32(r.getHeadPort(instance, utils.DashboardPortName, utils.DefaultDashboardPort))
@@ -284,15 +280,21 @@ func (r *NetworkPolicyController) buildBaseIngressRules(instance *rayv1.RayClust
 							"app.kubernetes.io/name":      utils.ApplicationName,
 						},
 					},
-					NamespaceSelector: &metav1.LabelSelector{
-						MatchExpressions: []metav1.LabelSelectorRequirement{
-							{
-								Key:      corev1.LabelMetadataName,
-								Operator: metav1.LabelSelectorOpIn,
-								Values:   []string{operatorNamespace},
-							},
-						},
-					},
+				},
+			},
+			Ports: []networkingv1.NetworkPolicyPort{
+				{Protocol: &tcpProtocol, Port: &dashboardPort},
+				{Protocol: &tcpProtocol, Port: &clientPort},
+			},
+		},
+		// Rule 3: Same-namespace access to dashboard and client ports.
+		// An empty PodSelector matches all pods in the same namespace, which
+		// covers RayJob submitter pods targeting this cluster via clusterSelector
+		// (where no ownerReference exists on the RayCluster).
+		{
+			From: []networkingv1.NetworkPolicyPeer{
+				{
+					PodSelector: &metav1.LabelSelector{},
 				},
 			},
 			Ports: []networkingv1.NetworkPolicyPort{
@@ -407,14 +409,6 @@ func (r *NetworkPolicyController) cleanupNetworkPoliciesIfNeeded(ctx context.Con
 	}
 
 	return ctrl.Result{}, nil
-}
-
-// getOperatorNamespace returns the namespace where the KubeRay operator is running
-func (r *NetworkPolicyController) getOperatorNamespace() string {
-	if podNs := os.Getenv("POD_NAMESPACE"); podNs != "" {
-		return podNs
-	}
-	return "ray-system"
 }
 
 // buildRayJobPeer returns a NetworkPolicyPeer for the RayJob submitter pod

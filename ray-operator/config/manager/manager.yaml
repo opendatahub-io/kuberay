@@ -31,8 +31,8 @@ spec:
         args:
         - --feature-gates=RayClusterStatusConditions=true # this argument can be removed for version >= v1.3 where the feature gate is enabled by default.
 #        - --enable-leader-election
-        image: upstream-network-policy:latest
-        imagePullPolicy: Never
+        image: kuberay/operator
+        imagePullPolicy: IfNotPresent
         ports:
         - name: http
           containerPort: 8080
