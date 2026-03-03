@@ -271,6 +271,8 @@ func (r *NetworkPolicyController) buildBaseIngressRules(instance *rayv1.RayClust
 		},
 		// Rule 2: KubeRay operator access to dashboard and client ports.
 		// Ports are resolved dynamically from the head container spec.
+		// NamespaceSelector is intentionally empty (matches all namespaces) so that
+		// the operator pod is allowed regardless of which namespace it runs in.
 		{
 			From: []networkingv1.NetworkPolicyPeer{
 				{
@@ -280,6 +282,7 @@ func (r *NetworkPolicyController) buildBaseIngressRules(instance *rayv1.RayClust
 							"app.kubernetes.io/name":      utils.ApplicationName,
 						},
 					},
+					NamespaceSelector: &metav1.LabelSelector{},
 				},
 			},
 			Ports: []networkingv1.NetworkPolicyPort{
