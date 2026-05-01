@@ -16,4 +16,4 @@
 - Testing Strategy
   - [ ] Unit tests
   - [ ] Manual tests
-  - [ ] This PR is not tested :(
+  - [ ] This PR is not tested :((
