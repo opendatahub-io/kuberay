@@ -352,7 +352,18 @@ func TestValidateRayJobSpec(t *testing.T) {
 			},
 		},
 	})
-	assert.Error(t, err, "The RayJob is invalid because the ClusterSelector mode doesn't support the suspend operation.")
+	assert.Error(t, err, "The RayJob is invalid because a RayJob with shutdownAfterJobFinishes set to false is not allowed to be suspended.")
+
+	err = validateRayJobSpec(&rayv1.RayJob{
+		Spec: rayv1.RayJobSpec{
+			Suspend:                  true,
+			ShutdownAfterJobFinishes: true,
+			ClusterSelector: map[string]string{
+				"ray.io/cluster": "my-cluster",
+			},
+		},
+	})
+	assert.NoError(t, err, "ClusterSelector RayJob may be suspended when shutdownAfterJobFinishes is true.")
 
 	err = validateRayJobSpec(&rayv1.RayJob{
 		Spec: rayv1.RayJobSpec{

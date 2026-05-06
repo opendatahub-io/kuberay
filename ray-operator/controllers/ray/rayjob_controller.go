@@ -258,6 +258,41 @@ func (r *RayJobReconciler) Reconcile(ctx context.Context, request ctrl.Request) 
 		// cleaned up at all. To keep the atomicity, if a RayJob is in the `Suspending` status, we should delete all of its
 		// associated resources and then transition the status to `Suspended` no matter the value of the `suspend` flag.
 
+		// RayJob targets an existing RayCluster: stop the Ray job via the dashboard API; do not delete the cluster.
+		if len(rayJobInstance.Spec.ClusterSelector) != 0 {
+			if rayJobInstance.Status.DashboardURL != "" && rayJobInstance.Status.JobId != "" {
+				rayDashboardClient := r.dashboardClientFunc()
+				rayDashboardClient.InitClient(rayJobInstance.Status.DashboardURL)
+				if err := rayDashboardClient.StopJob(ctx, rayJobInstance.Status.JobId); err != nil {
+					jobInfo, err2 := rayDashboardClient.GetJobInfo(ctx, rayJobInstance.Status.JobId)
+					if err2 != nil {
+						if !errors.IsBadRequest(err2) {
+							logger.Error(err, "Failed to stop Ray job for clusterSelector RayJob", "getJobInfoErr", err2)
+							return ctrl.Result{RequeueAfter: RayJobDefaultRequeueDuration}, err
+						}
+						logger.Info("StopJob failed but Ray job is not on the cluster; continuing suspend", "error", err)
+					} else if !rayv1.IsJobTerminal(jobInfo.JobStatus) {
+						logger.Error(err, "Failed to stop Ray job for clusterSelector RayJob")
+						return ctrl.Result{RequeueAfter: RayJobDefaultRequeueDuration}, err
+					}
+				}
+				rayJobInstance.Status.JobStatus = rayv1.JobStatusStopped
+			} else {
+				rayJobInstance.Status.JobStatus = rayv1.JobStatusNew
+			}
+			isJobDeleted, err := r.deleteSubmitterJob(ctx, rayJobInstance)
+			if err != nil {
+				return ctrl.Result{RequeueAfter: RayJobDefaultRequeueDuration}, err
+			}
+			if !isJobDeleted {
+				return ctrl.Result{RequeueAfter: RayJobDefaultRequeueDuration}, nil
+			}
+			rayJobInstance.Status.JobDeploymentStatus = rayv1.JobDeploymentStatusSuspended
+			rayJobInstance.Status.JobId = ""
+			rayJobInstance.Status.Message = ""
+			break
+		}
+
 		// TODO (kevin85421): Currently, Ray doesn't have a best practice to stop a Ray job gracefully. At this moment,
 		// KubeRay doesn't stop the Ray job before suspending the RayJob. If users want to stop the Ray job by SIGTERM,
 		// users need to set the Pod's preStop hook by themselves.
@@ -723,9 +758,6 @@ func validateRayJobSpec(rayJob *rayv1.RayJob) error {
 	// to suspend a RayJob with autoscaling enabled, but Kueue doesn't.
 	if rayJob.Spec.Suspend && !rayJob.Spec.ShutdownAfterJobFinishes {
 		return fmt.Errorf("a RayJob with shutdownAfterJobFinishes set to false is not allowed to be suspended")
-	}
-	if rayJob.Spec.Suspend && len(rayJob.Spec.ClusterSelector) != 0 {
-		return fmt.Errorf("the ClusterSelector mode doesn't support the suspend operation")
 	}
 	if rayJob.Spec.RayClusterSpec == nil && len(rayJob.Spec.ClusterSelector) == 0 {
 		return fmt.Errorf("one of RayClusterSpec or ClusterSelector must be set")
