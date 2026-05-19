@@ -775,6 +775,7 @@ authorization:
 			configMap.Labels = make(map[string]string)
 		}
 		configMap.Labels["app"] = "kube-rbac-proxy"
+		configMap.Labels[utils.KubernetesCreatedByLabelKey] = utils.ComponentName
 
 		if configMap.Data == nil {
 			configMap.Data = make(map[string]string)
