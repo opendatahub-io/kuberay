@@ -25,6 +25,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -40,6 +41,12 @@ import (
 const (
 	// MediumRequeueDelay for ongoing rollouts
 	MediumRequeueDelay = 10 * time.Second
+
+	// SafetyRequeueDelay provides periodic self-healing if watch events are missed
+	SafetyRequeueDelay = 5 * time.Minute
+
+	// ReconcileTimeout prevents a single reconcile from blocking the worker indefinitely
+	ReconcileTimeout = 60 * time.Second
 
 	// Finalizer for ensuring cleanup of cross-namespace resources (HTTPRoutes)
 	authenticationFinalizer = "ray.io/authentication-resources"
@@ -101,6 +108,9 @@ func NewAuthenticationController(mgr manager.Manager, options RayClusterReconcil
 
 // Reconcile handles authentication-related resources and manages OAuth sidecar injection
 func (r *AuthenticationController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	ctx, cancel := context.WithTimeout(ctx, ReconcileTimeout)
+	defer cancel()
+
 	logger := ctrl.LoggerFrom(ctx).WithName("authentication-controller")
 	logger.Info("Reconciling Authentication", "namespacedName", req.NamespacedName)
 
@@ -154,8 +164,8 @@ func (r *AuthenticationController) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	logger.Info("Successfully reconciled authentication", "cluster", rayCluster.Name)
-	// Don't requeue on success - let watches trigger next reconciliation
-	return ctrl.Result{}, nil
+	// Safety requeue to self-heal if a watch event is missed due to predicate filtering
+	return ctrl.Result{RequeueAfter: SafetyRequeueDelay}, nil
 }
 
 // handleDeletion handles cleanup when a RayCluster is being deleted (finalizer pattern)
@@ -233,6 +243,10 @@ func (r *AuthenticationController) handleOIDCConfiguration(ctx context.Context, 
 	if r.options.IsOpenShift {
 		if err := r.enforceEnableIngressFalseOnOpenShift(ctx, rayCluster, logger); err != nil {
 			return err
+		}
+		// Re-fetch after spec update to get the latest resourceVersion
+		if err := r.Get(ctx, req.NamespacedName, rayCluster); err != nil {
+			return fmt.Errorf("failed to re-fetch after enableIngress update: %w", err)
 		}
 	}
 
@@ -1085,12 +1099,15 @@ func (r *AuthenticationController) SetupWithManager(mgr ctrl.Manager) error {
 	)
 
 	return ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 3}).
 		// PRIMARY: Watch RayClusters
 		For(&rayv1.RayCluster{}, builder.WithPredicates(rayClusterPredicate)).
 		// OWNED: Watch resources owned by RayClusters
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&corev1.Service{}).
 		Owns(&routev1.Route{}).
+		Owns(&gatewayv1beta1.ReferenceGrant{}).
+		Owns(&gatewayv1beta1.HTTPRoute{}).
 		// // SECONDARY: Watch cluster-wide auth config and map to all RayClusters
 		// Watches(
 		// 	&configv1.Authentication{},
