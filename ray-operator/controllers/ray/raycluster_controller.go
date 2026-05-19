@@ -301,6 +301,20 @@ func (r *RayClusterReconciler) rayClusterReconcile(ctx context.Context, instance
 		return ctrl.Result{}, nil
 	}
 
+	// On OpenShift, enforce enableIngress: false for Gateway-only access.
+	// Handles pre-existing clusters from before the webhook enforced this on CREATE/UPDATE.
+	if r.options.IsOpenShift {
+		if instance.Spec.HeadGroupSpec.EnableIngress == nil || *instance.Spec.HeadGroupSpec.EnableIngress {
+			logger.Info("Enforcing enableIngress to false on OpenShift (Gateway-only access)",
+				"cluster", instance.Name, "previousValue", instance.Spec.HeadGroupSpec.EnableIngress)
+			instance.Spec.HeadGroupSpec.EnableIngress = ptr.To(false)
+			if err := r.Update(ctx, instance); err != nil {
+				return ctrl.Result{RequeueAfter: DefaultRequeueDuration}, err
+			}
+			return ctrl.Result{RequeueAfter: DefaultRequeueDuration}, nil
+		}
+	}
+
 	reconcileFuncs := []reconcileFunc{
 		r.reconcileAutoscalerServiceAccount,
 		r.reconcileAutoscalerRole,
