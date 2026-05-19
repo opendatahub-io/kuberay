@@ -42,7 +42,9 @@ const (
 	// MediumRequeueDelay for ongoing rollouts
 	MediumRequeueDelay = 10 * time.Second
 
-	// SafetyRequeueDelay provides periodic self-healing if watch events are missed
+	// SafetyRequeueDelay provides periodic re-reconciliation to detect drift in
+	// cross-namespace resources (HTTPRoute, ReferenceGrant) that cannot use owner
+	// references and therefore don't trigger watch-based reconciliation.
 	SafetyRequeueDelay = 5 * time.Minute
 
 	// ReconcileTimeout prevents a single reconcile from blocking the worker indefinitely
@@ -164,7 +166,8 @@ func (r *AuthenticationController) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	logger.Info("Successfully reconciled authentication", "cluster", rayCluster.Name)
-	// Safety requeue to self-heal if a watch event is missed due to predicate filtering
+	// Periodic re-reconcile to detect drift in cross-namespace resources (HTTPRoute,
+	// ReferenceGrant) that lack owner references and won't trigger watch events.
 	return ctrl.Result{RequeueAfter: SafetyRequeueDelay}, nil
 }
 
@@ -1102,21 +1105,14 @@ func (r *AuthenticationController) SetupWithManager(mgr ctrl.Manager) error {
 		WithOptions(controller.Options{MaxConcurrentReconciles: 3}).
 		// PRIMARY: Watch RayClusters
 		For(&rayv1.RayCluster{}, builder.WithPredicates(rayClusterPredicate)).
-		// OWNED: Watch resources owned by RayClusters
+		// OWNED: Watch resources with owner references back to RayClusters.
+		// Note: HTTPRoute and ReferenceGrant are intentionally excluded here because
+		// HTTPRoute is created in platformNamespace (cross-namespace owner refs are impossible)
+		// and ReferenceGrant uses reference-counting cleanup without owner refs.
+		// SafetyRequeueDelay compensates by periodically re-reconciling to detect drift.
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&corev1.Service{}).
 		Owns(&routev1.Route{}).
-		Owns(&gatewayv1beta1.ReferenceGrant{}).
-		Owns(&gatewayv1beta1.HTTPRoute{}).
-		// // SECONDARY: Watch cluster-wide auth config and map to all RayClusters
-		// Watches(
-		// 	&configv1.Authentication{},
-		// 	handler.EnqueueRequestsFromMapFunc(r.mapAuthResourceToRayClusters),
-		// ).
-		// Watches(
-		// 	&configv1.OAuth{},
-		// 	handler.EnqueueRequestsFromMapFunc(r.mapAuthResourceToRayClusters),
-		// ).
 		Named("authentication").
 		Complete(r)
 }
