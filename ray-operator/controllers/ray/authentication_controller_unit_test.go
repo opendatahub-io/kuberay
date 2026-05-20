@@ -744,6 +744,10 @@ func TestGetOAuthProxyVolumes(t *testing.T) {
 }
 
 func TestGetOIDCProxySidecar(t *testing.T) {
+	original := oidcProxyContainerImage
+	oidcProxyContainerImage = defaultOIDCProxyContainerImage
+	t.Cleanup(func() { oidcProxyContainerImage = original })
+
 	cluster := &rayv1.RayCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-cluster",

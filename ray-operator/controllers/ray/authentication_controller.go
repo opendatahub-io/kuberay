@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -62,7 +63,7 @@ const (
 var oidcProxyContainerImage = defaultOIDCProxyContainerImage
 
 func init() {
-	if image := os.Getenv("RELATED_IMAGE_KUBE_RBAC_PROXY"); image != "" {
+	if image := strings.TrimSpace(os.Getenv("RELATED_IMAGE_KUBE_RBAC_PROXY")); image != "" {
 		oidcProxyContainerImage = image
 	}
 }
