@@ -754,7 +754,7 @@ func TestGetOIDCProxySidecar(t *testing.T) {
 	container := GetOIDCProxySidecar(cluster)
 
 	assert.Equal(t, oidcProxyContainerName, container.Name)
-	assert.Equal(t, oidcProxyContainerImage, container.Image)
+	assert.Equal(t, defaultOIDCProxyContainerImage, container.Image)
 	assert.NotEmpty(t, container.Args)
 	assert.NotEmpty(t, container.VolumeMounts)
 	assert.NotEmpty(t, container.Ports)
@@ -765,6 +765,24 @@ func TestGetOIDCProxySidecar(t *testing.T) {
 
 	// Verify volume mount
 	assert.Equal(t, "kube-rbac-proxy-config-"+cluster.Name, container.VolumeMounts[0].Name)
+}
+
+func TestGetOIDCProxySidecarImageOverride(t *testing.T) {
+	customImage := "registry.example.com/custom/kube-rbac-proxy:v1.0"
+	original := oidcProxyContainerImage
+	t.Cleanup(func() { oidcProxyContainerImage = original })
+
+	oidcProxyContainerImage = customImage
+
+	cluster := &rayv1.RayCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+		},
+	}
+
+	container := GetOIDCProxySidecar(cluster)
+	assert.Equal(t, customImage, container.Image)
 }
 
 func TestGetOIDCProxyVolumes(t *testing.T) {
