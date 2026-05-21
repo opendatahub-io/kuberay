@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
@@ -308,7 +309,8 @@ func cacheSelectors() (map[client.Object]cache.ByObject, error) {
 	selector := labels.NewSelector().Add(*label)
 
 	return map[client.Object]cache.ByObject{
-		&batchv1.Job{}: {Label: selector},
+		&batchv1.Job{}:       {Label: selector},
+		&corev1.ConfigMap{}: {Label: selector},
 	}, nil
 }
 

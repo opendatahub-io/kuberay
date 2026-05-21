@@ -25,6 +25,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -40,6 +41,14 @@ import (
 const (
 	// MediumRequeueDelay for ongoing rollouts
 	MediumRequeueDelay = 10 * time.Second
+
+	// SafetyRequeueDelay provides periodic re-reconciliation to detect drift in
+	// cross-namespace resources (HTTPRoute, ReferenceGrant) that cannot use owner
+	// references and therefore don't trigger watch-based reconciliation.
+	SafetyRequeueDelay = 5 * time.Minute
+
+	// ReconcileTimeout prevents a single reconcile from blocking the worker indefinitely
+	ReconcileTimeout = 60 * time.Second
 
 	// Finalizer for ensuring cleanup of cross-namespace resources (HTTPRoutes)
 	authenticationFinalizer = "ray.io/authentication-resources"
@@ -101,6 +110,9 @@ func NewAuthenticationController(mgr manager.Manager, options RayClusterReconcil
 
 // Reconcile handles authentication-related resources and manages OAuth sidecar injection
 func (r *AuthenticationController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	ctx, cancel := context.WithTimeout(ctx, ReconcileTimeout)
+	defer cancel()
+
 	logger := ctrl.LoggerFrom(ctx).WithName("authentication-controller")
 	logger.Info("Reconciling Authentication", "namespacedName", req.NamespacedName)
 
@@ -154,8 +166,9 @@ func (r *AuthenticationController) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	logger.Info("Successfully reconciled authentication", "cluster", rayCluster.Name)
-	// Don't requeue on success - let watches trigger next reconciliation
-	return ctrl.Result{}, nil
+	// Periodic re-reconcile to detect drift in cross-namespace resources (HTTPRoute,
+	// ReferenceGrant) that lack owner references and won't trigger watch events.
+	return ctrl.Result{RequeueAfter: SafetyRequeueDelay}, nil
 }
 
 // handleDeletion handles cleanup when a RayCluster is being deleted (finalizer pattern)
@@ -224,16 +237,6 @@ func (r *AuthenticationController) handleOIDCConfiguration(ctx context.Context, 
 			}
 		}
 		return nil
-	}
-
-	// On OpenShift, enforce enableIngress: false for Gateway-only access
-	// This handles both new clusters (webhook sets it) and existing clusters (upgrade scenario)
-	// HTTPRoute creation is independent of enableIngress
-	// enableIngress controls basic Route/Ingress creation (which may be disabled by webhooks in ODH)
-	if r.options.IsOpenShift {
-		if err := r.enforceEnableIngressFalseOnOpenShift(ctx, rayCluster, logger); err != nil {
-			return err
-		}
 	}
 
 	// Add finalizer to ensure cleanup happens before cluster deletion
@@ -758,6 +761,7 @@ authorization:
 			configMap.Labels = make(map[string]string)
 		}
 		configMap.Labels["app"] = "kube-rbac-proxy"
+		configMap.Labels[utils.KubernetesCreatedByLabelKey] = utils.ComponentName
 
 		if configMap.Data == nil {
 			configMap.Data = make(map[string]string)
@@ -1036,46 +1040,6 @@ func (r *AuthenticationController) cleanupOrphanedReferenceGrant(ctx context.Con
 	return nil
 }
 
-// enforceEnableIngressFalseOnOpenShift ensures enableIngress is set to false on OpenShift
-// This provides upgrade idempotency - handles existing clusters that weren't processed by webhook
-// The webhook sets this for new/edited clusters, this handles clusters from before the webhook was updated
-// Placed in Authentication controller because HTTPRoute requires Gateway access (not basic Routes)
-func (r *AuthenticationController) enforceEnableIngressFalseOnOpenShift(ctx context.Context, rayCluster *rayv1.RayCluster, logger logr.Logger) error {
-	// Check if enableIngress is already false
-	if rayCluster.Spec.HeadGroupSpec.EnableIngress != nil && !*rayCluster.Spec.HeadGroupSpec.EnableIngress {
-		return nil // Already false, nothing to do
-	}
-
-	// Need to set to false
-	wasTrue := rayCluster.Spec.HeadGroupSpec.EnableIngress != nil && *rayCluster.Spec.HeadGroupSpec.EnableIngress
-	wasMissing := rayCluster.Spec.HeadGroupSpec.EnableIngress == nil
-
-	logger.Info("Enforcing enableIngress to false on OpenShift (Gateway-only access)",
-		"cluster", rayCluster.Name, "previousValue", rayCluster.Spec.HeadGroupSpec.EnableIngress)
-
-	// Update the cluster spec
-	rayCluster.Spec.HeadGroupSpec.EnableIngress = ptr.To(false)
-	if err := r.Update(ctx, rayCluster); err != nil {
-		logger.Error(err, "Failed to enforce enableIngress to false", "cluster", rayCluster.Name)
-		return err
-	}
-
-	if wasTrue {
-		logger.Info("Overrode user-specified enableIngress from true to false for Gateway-only access",
-			"cluster", rayCluster.Name)
-		r.Recorder.Eventf(rayCluster, corev1.EventTypeNormal,
-			"EnableIngressEnforced",
-			"Set enableIngress to false to enforce Gateway-only access (overrode user value)")
-	} else if wasMissing {
-		logger.Info("Set enableIngress to false for Gateway-only access (was not set)", "cluster", rayCluster.Name)
-		r.Recorder.Eventf(rayCluster, corev1.EventTypeNormal,
-			"EnableIngressSet",
-			"Set enableIngress to false for Gateway-only access")
-	}
-
-	return nil
-}
-
 // SetupWithManager sets up the controller with the Manager
 func (r *AuthenticationController) SetupWithManager(mgr ctrl.Manager) error {
 	// Predicate to only reconcile RayClusters when relevant changes occur
@@ -1085,21 +1049,17 @@ func (r *AuthenticationController) SetupWithManager(mgr ctrl.Manager) error {
 	)
 
 	return ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 3}).
 		// PRIMARY: Watch RayClusters
 		For(&rayv1.RayCluster{}, builder.WithPredicates(rayClusterPredicate)).
-		// OWNED: Watch resources owned by RayClusters
+		// OWNED: Watch resources with owner references back to RayClusters.
+		// Note: HTTPRoute and ReferenceGrant are intentionally excluded here because
+		// HTTPRoute is created in platformNamespace (cross-namespace owner refs are impossible)
+		// and ReferenceGrant uses reference-counting cleanup without owner refs.
+		// SafetyRequeueDelay compensates by periodically re-reconciling to detect drift.
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&corev1.Service{}).
 		Owns(&routev1.Route{}).
-		// // SECONDARY: Watch cluster-wide auth config and map to all RayClusters
-		// Watches(
-		// 	&configv1.Authentication{},
-		// 	handler.EnqueueRequestsFromMapFunc(r.mapAuthResourceToRayClusters),
-		// ).
-		// Watches(
-		// 	&configv1.OAuth{},
-		// 	handler.EnqueueRequestsFromMapFunc(r.mapAuthResourceToRayClusters),
-		// ).
 		Named("authentication").
 		Complete(r)
 }
