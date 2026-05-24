@@ -2,123 +2,35 @@ package support
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"path"
-	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 )
 
+// Option is a function that modifies a value of type T
+// This pattern allows for flexible configuration of objects with optional settings
+type Option[T any] func(T)
+
+// Test represents a test that can be run in parallel with other tests
+// This interface defines the minimum set of methods required for test isolation
 type Test interface {
+	// T returns the testing.T instance for this test
 	T() *testing.T
+
+	// Ctx returns the context for this test
+	// The context is automatically cancelled when the test completes
 	Ctx() context.Context
+
+	// Client returns the Kubernetes client for this test
+	// Each test gets its own client to avoid interference
 	Client() Client
+
+	// OutputDir returns the output directory for test artifacts
+	// Each test gets its own directory to avoid conflicts
 	OutputDir() string
 
-	NewTestNamespace(...Option[*corev1.Namespace]) *corev1.Namespace
-}
-
-type Option[T any] interface {
-	applyTo(to T) error
-}
-
-type errorOption[T any] func(to T) error
-
-func (o errorOption[T]) applyTo(to T) error {
-	return o(to)
-}
-
-var _ Option[any] = errorOption[any](nil)
-
-func With(t *testing.T) Test {
-	t.Helper()
-	ctx := context.Background()
-	if deadline, ok := t.Deadline(); ok {
-		withDeadline, cancel := context.WithDeadline(ctx, deadline)
-		t.Cleanup(cancel)
-		ctx = withDeadline
-	}
-
-	return &T{
-		t:   t,
-		ctx: ctx,
-	}
-}
-
-type T struct {
-	t *testing.T
-	//nolint:containedctx //nolint:nolintlint // TODO: The reason for this lint is unknown
-	ctx       context.Context
-	client    Client
-	outputDir string
-	once      struct {
-		client    sync.Once
-		outputDir sync.Once
-	}
-}
-
-func (t *T) T() *testing.T {
-	return t.t
-}
-
-func (t *T) Ctx() context.Context {
-	return t.ctx
-}
-
-func (t *T) Client() Client {
-	t.T().Helper()
-	t.once.client.Do(func() {
-		c, err := newTestClient()
-		if err != nil {
-			t.T().Fatalf("Error creating client: %v", err)
-		}
-		t.client = c
-	})
-	return t.client
-}
-
-func (t *T) OutputDir() string {
-	t.T().Helper()
-	t.once.outputDir.Do(func() {
-		if parent, ok := os.LookupEnv(KuberayTestOutputDir); ok {
-			if !path.IsAbs(parent) {
-				if cwd, err := os.Getwd(); err == nil {
-					// best effort to output the parent absolute path
-					parent = path.Join(cwd, parent)
-				}
-			}
-			LogWithTimestamp(t.T(), "Creating output directory in parent directory: %s", parent)
-			safeName := strings.ReplaceAll(t.T().Name(), "/", "_")
-			dir, err := os.MkdirTemp(parent, safeName)
-			if err != nil {
-				t.T().Fatalf("Error creating output directory: %v", err)
-			}
-			t.outputDir = dir
-		} else {
-			LogWithTimestamp(t.T(), "Creating ephemeral output directory as %s env variable is unset", KuberayTestOutputDir)
-			t.outputDir = t.T().TempDir()
-		}
-		LogWithTimestamp(t.T(), "Output directory has been created at: %s", t.outputDir)
-	})
-	return t.outputDir
-}
-
-func (t *T) NewTestNamespace(options ...Option[*corev1.Namespace]) *corev1.Namespace {
-	t.T().Helper()
-	namespace := createTestNamespace(t, options...)
-	t.T().Cleanup(func() {
-		storeAllPodLogs(t, namespace)
-		storeEvents(t, namespace)
-		deleteTestNamespace(t, namespace)
-	})
-	return namespace
-}
-
-func LogWithTimestamp(t *testing.T, format string, args ...interface{}) {
-	t.Helper()
-	t.Logf("[%s] %s", time.Now().Format(time.RFC3339), fmt.Sprintf(format, args...))
+	// NewTestNamespace creates a new namespace for this test with a unique name
+	// The namespace is automatically cleaned up when the test completes
+	// Options can be provided to customize the namespace
+	NewTestNamespace(opts ...Option[*corev1.Namespace]) *corev1.Namespace
 }

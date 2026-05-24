@@ -14,19 +14,17 @@ import (
 )
 
 func TestRayJobSuspend(t *testing.T) {
-	test := With(t)
-	g := NewWithT(t)
+	_ = WithParallel(t).WithConfigMaps("long_running.py", "counter.py")
 
-	// Create a namespace
-	namespace := test.NewTestNamespace()
+	t.Run("Suspend the RayJob when its status is 'Running', and then resume it.", func(t *testing.T) {
+		t.Parallel()
+		subtest := WithParallel(t)
+		jobs := subtest.WithConfigMaps("long_running.py", "counter.py")
+		g := subtest.Gomega()
 
-	// Job scripts
-	jobsAC := newConfigMap(namespace.Name, files(test, "long_running.py", "counter.py"))
-	jobs, err := test.Client().Core().CoreV1().ConfigMaps(namespace.Name).Apply(test.Ctx(), jobsAC, TestApplyOptions)
-	g.Expect(err).NotTo(HaveOccurred())
-	LogWithTimestamp(test.T(), "Created ConfigMap %s/%s successfully", jobs.Namespace, jobs.Name)
+		// Create a namespace (ConfigMap will be created automatically)
+		namespace := subtest.WithNamespace()
 
-	test.T().Run("Suspend the RayJob when its status is 'Running', and then resume it.", func(_ *testing.T) {
 		// RayJob
 		rayJobAC := rayv1ac.RayJob("long-running", namespace.Name).
 			WithSpec(rayv1ac.RayJobSpec().
@@ -36,49 +34,54 @@ func TestRayJobSuspend(t *testing.T) {
 				WithTTLSecondsAfterFinished(600).
 				WithSubmitterPodTemplate(jobSubmitterPodTemplateApplyConfiguration()))
 
-		rayJob, err := test.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(test.Ctx(), rayJobAC, TestApplyOptions)
+		rayJob, err := subtest.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(subtest.Ctx(), rayJobAC, TestApplyOptions)
 		g.Expect(err).NotTo(HaveOccurred())
-		LogWithTimestamp(test.T(), "Created RayJob %s/%s successfully", rayJob.Namespace, rayJob.Name)
+		LogWithTimestamp(t, "Created RayJob %s/%s successfully", rayJob.Namespace, rayJob.Name)
 
-		LogWithTimestamp(test.T(), "Waiting for RayJob %s/%s to be 'Running'", rayJob.Namespace, rayJob.Name)
-		g.Eventually(RayJob(test, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
+		LogWithTimestamp(t, "Waiting for RayJob %s/%s to be 'Running'", rayJob.Namespace, rayJob.Name)
+		g.Eventually(RayJob(subtest, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
 			Should(WithTransform(RayJobDeploymentStatus, Equal(rayv1.JobDeploymentStatusRunning)))
 
-		LogWithTimestamp(test.T(), "Suspend the RayJob %s/%s", rayJob.Namespace, rayJob.Name)
+		LogWithTimestamp(t, "Suspend the RayJob %s/%s", rayJob.Namespace, rayJob.Name)
 		rayJobAC.Spec.WithSuspend(true)
-		rayJob, err = test.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(test.Ctx(), rayJobAC, TestApplyOptions)
+		rayJob, err = subtest.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(subtest.Ctx(), rayJobAC, TestApplyOptions)
 		g.Expect(err).NotTo(HaveOccurred())
 
-		LogWithTimestamp(test.T(), "Waiting for RayJob %s/%s to be 'Suspended'", rayJob.Namespace, rayJob.Name)
-		g.Eventually(RayJob(test, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
+		LogWithTimestamp(t, "Waiting for RayJob %s/%s to be 'Suspended'", rayJob.Namespace, rayJob.Name)
+		g.Eventually(RayJob(subtest, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
 			Should(WithTransform(RayJobDeploymentStatus, Equal(rayv1.JobDeploymentStatusSuspended)))
 
-		// TODO (kevin85421): We may need to use `Eventually` instead if the assertion is flaky.
 		// Assert the RayCluster has been torn down
-		_, err = GetRayCluster(test, namespace.Name, rayJob.Status.RayClusterName)
-		g.Expect(k8serrors.IsNotFound(err)).To(BeTrue())
+		g.Eventually(func() error {
+			_, err := GetRayCluster(subtest, namespace.Name, rayJob.Status.RayClusterName)
+			return err
+		}, TestTimeoutShort).Should(WithTransform(k8serrors.IsNotFound, BeTrue()))
 
 		// Assert the submitter Job has been cascade deleted
-		g.Eventually(Jobs(test, namespace.Name)).Should(BeEmpty())
+		g.Eventually(Jobs(subtest, namespace.Name), TestTimeoutShort).Should(BeEmpty())
 
-		// TODO (kevin85421): Check whether the Pods associated with the RayCluster and the submitter Job have been deleted.
-		// For Kubernetes Jobs, the default deletion behavior is "orphanDependents," which means the Pods will not be
-		// cascade-deleted with the Kubernetes Job by default.
-
-		LogWithTimestamp(test.T(), "Resume the RayJob by updating `suspend` to false.")
+		LogWithTimestamp(t, "Resume the RayJob by updating `suspend` to false.")
 		rayJobAC.Spec.WithSuspend(false)
-		rayJob, err = test.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(test.Ctx(), rayJobAC, TestApplyOptions)
+		rayJob, err = subtest.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(subtest.Ctx(), rayJobAC, TestApplyOptions)
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Eventually(RayJob(test, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
+		g.Eventually(RayJob(subtest, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
 			Should(WithTransform(RayJobDeploymentStatus, Equal(rayv1.JobDeploymentStatusRunning)))
 
 		// Delete the RayJob
-		err = test.Client().Ray().RayV1().RayJobs(namespace.Name).Delete(test.Ctx(), rayJob.Name, metav1.DeleteOptions{})
+		err = subtest.Client().Ray().RayV1().RayJobs(namespace.Name).Delete(subtest.Ctx(), rayJob.Name, metav1.DeleteOptions{})
 		g.Expect(err).NotTo(HaveOccurred())
-		LogWithTimestamp(test.T(), "Deleted RayJob %s/%s successfully", rayJob.Namespace, rayJob.Name)
+		LogWithTimestamp(t, "Deleted RayJob %s/%s successfully", rayJob.Namespace, rayJob.Name)
 	})
 
-	test.T().Run("Create a suspended RayJob, and then resume it.", func(_ *testing.T) {
+	t.Run("Create a suspended RayJob, and then resume it.", func(t *testing.T) {
+		t.Parallel()
+		subtest := WithParallel(t)
+		jobs := subtest.WithConfigMaps("long_running.py", "counter.py")
+		g := subtest.Gomega()
+
+		// Create a namespace (ConfigMap will be created automatically)
+		namespace := subtest.WithNamespace()
+
 		// RayJob
 		rayJobAC := rayv1ac.RayJob("counter", namespace.Name).
 			WithSpec(rayv1ac.RayJobSpec().
@@ -92,45 +95,45 @@ env_vars:
 				WithSubmitterPodTemplate(jobSubmitterPodTemplateApplyConfiguration()).
 				WithRayClusterSpec(newRayClusterSpec(mountConfigMap[rayv1ac.RayClusterSpecApplyConfiguration](jobs, "/home/ray/jobs"))))
 
-		rayJob, err := test.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(test.Ctx(), rayJobAC, TestApplyOptions)
+		rayJob, err := subtest.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(subtest.Ctx(), rayJobAC, TestApplyOptions)
 		g.Expect(err).NotTo(HaveOccurred())
-		LogWithTimestamp(test.T(), "Created RayJob %s/%s successfully", rayJob.Namespace, rayJob.Name)
+		LogWithTimestamp(t, "Created RayJob %s/%s successfully", rayJob.Namespace, rayJob.Name)
 
-		LogWithTimestamp(test.T(), "Waiting for RayJob %s/%s to be 'Suspended'", rayJob.Namespace, rayJob.Name)
-		g.Eventually(RayJob(test, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
+		LogWithTimestamp(t, "Waiting for RayJob %s/%s to be 'Suspended'", rayJob.Namespace, rayJob.Name)
+		g.Eventually(RayJob(subtest, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
 			Should(WithTransform(RayJobDeploymentStatus, Equal(rayv1.JobDeploymentStatusSuspended)))
 
-		LogWithTimestamp(test.T(), "Resume the RayJob by updating `suspend` to false.")
+		LogWithTimestamp(t, "Resume the RayJob by updating `suspend` to false.")
 		rayJobAC.Spec.WithSuspend(false)
-		rayJob, err = test.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(test.Ctx(), rayJobAC, TestApplyOptions)
+		rayJob, err = subtest.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(subtest.Ctx(), rayJobAC, TestApplyOptions)
 		g.Expect(err).NotTo(HaveOccurred())
 
-		LogWithTimestamp(test.T(), "Waiting for RayJob %s/%s to complete", rayJob.Namespace, rayJob.Name)
-		g.Eventually(RayJob(test, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
+		LogWithTimestamp(t, "Waiting for RayJob %s/%s to complete", rayJob.Namespace, rayJob.Name)
+		g.Eventually(RayJob(subtest, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
 			Should(WithTransform(RayJobDeploymentStatus, Equal(rayv1.JobDeploymentStatusComplete)))
 
 		// Assert the RayJob has completed successfully
-		g.Expect(GetRayJob(test, rayJob.Namespace, rayJob.Name)).
+		g.Expect(GetRayJob(subtest, rayJob.Namespace, rayJob.Name)).
 			To(WithTransform(RayJobStatus, Equal(rayv1.JobStatusSucceeded)))
 
 		// Refresh the RayJob status
-		rayJob, err = GetRayJob(test, rayJob.Namespace, rayJob.Name)
+		rayJob, err = GetRayJob(subtest, rayJob.Namespace, rayJob.Name)
 		g.Expect(err).NotTo(HaveOccurred())
 
 		// Delete the RayJob
-		err = test.Client().Ray().RayV1().RayJobs(namespace.Name).Delete(test.Ctx(), rayJob.Name, metav1.DeleteOptions{})
+		err = subtest.Client().Ray().RayV1().RayJobs(namespace.Name).Delete(subtest.Ctx(), rayJob.Name, metav1.DeleteOptions{})
 		g.Expect(err).NotTo(HaveOccurred())
-		LogWithTimestamp(test.T(), "Deleted RayJob %s/%s successfully", rayJob.Namespace, rayJob.Name)
+		LogWithTimestamp(t, "Deleted RayJob %s/%s successfully", rayJob.Namespace, rayJob.Name)
 
 		// Assert the RayCluster has been cascade deleted
 		g.Eventually(func() error {
-			_, err := GetRayCluster(test, namespace.Name, rayJob.Status.RayClusterName)
+			_, err := GetRayCluster(subtest, namespace.Name, rayJob.Status.RayClusterName)
 			return err
-		}).Should(WithTransform(k8serrors.IsNotFound, BeTrue()))
+		}, TestTimeoutShort).Should(WithTransform(k8serrors.IsNotFound, BeTrue()))
 
 		// Assert the Pods has been cascade deleted
-		g.Eventually(Pods(test, namespace.Name,
-			LabelSelector(utils.RayClusterLabelKey+"="+rayJob.Status.RayClusterName))).
+		g.Eventually(Pods(subtest, namespace.Name,
+			LabelSelector(utils.RayClusterLabelKey+"="+rayJob.Status.RayClusterName)), TestTimeoutShort).
 			Should(BeEmpty())
 	})
 }
