@@ -371,6 +371,8 @@ rules:
   - delete
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - rbac.authorization.k8s.io

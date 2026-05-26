@@ -7,15 +7,19 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
 	routev1 "github.com/openshift/api/route/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	rbacv1 "k8s.io/api/rbac/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -33,6 +37,7 @@ import (
 	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
+	"github.com/ray-project/kuberay/ray-operator/controllers/ray/common"
 	"github.com/ray-project/kuberay/ray-operator/controllers/ray/utils"
 )
 
@@ -52,11 +57,35 @@ const (
 
 	oauthConfigVolumeName = "oauth-config"
 
-	oidcProxyContainerName  = "kube-rbac-proxy"
-	oidcProxyPortName       = "https"
-	oauthProxyImage         = "registry.redhat.io/openshift4/ose-oauth-proxy:latest"
-	oidcProxyContainerImage = "registry.redhat.io/openshift4/ose-kube-rbac-proxy-rhel9@sha256:11828cdb31cd9c1e15bc9e31c7e4669daf71c84c028cad2df5dbab68150da273"
+	oidcProxyContainerName = "kube-rbac-proxy"
+	oidcProxyPortName      = "https"
+	oauthProxyImage        = "registry.redhat.io/openshift4/ose-oauth-proxy:latest"
+
+	// defaultOIDCProxyContainerImage is the fallback image used when no RELATED_IMAGE_*
+	// env var is set. Must match an entry in the RHOAI CSV relatedImages so it is
+	// mirrored correctly in disconnected environments.
+	defaultOIDCProxyContainerImage = "registry.redhat.io/openshift4/ose-kube-rbac-proxy-rhel9@sha256:11828cdb31cd9c1e15bc9e31c7e4669daf71c84c028cad2df5dbab68150da273"
 )
+
+// oidcProxyContainerImage holds the resolved kube-rbac-proxy image. Populated by
+// init() from the operator's env vars so that disconnected installs can override
+// the image via RELATED_IMAGE_ODH_KUBE_AUTH_PROXY_IMAGE (set in manager.yaml and
+// substituted by the deployer from the RHOAI CSV relatedImages at install time).
+var oidcProxyContainerImage = defaultOIDCProxyContainerImage
+
+var errAutoscalerRoleBindingPending = errors.New("autoscaler RoleBinding not found yet")
+
+func init() {
+	for _, envVar := range []string{
+		"RELATED_IMAGE_ODH_KUBE_AUTH_PROXY_IMAGE",
+		"RELATED_IMAGE_OSE_KUBE_RBAC_PROXY_IMAGE",
+	} {
+		if image := strings.TrimSpace(os.Getenv(envVar)); image != "" {
+			oidcProxyContainerImage = image
+			return
+		}
+	}
+}
 
 // AuthenticationController is a completely independent controller that watches authentication-related
 // resources (ConfigMaps, ServiceAccounts, OpenShift Routes) and manages authentication configurations for Ray clusters on Openshift.
@@ -85,6 +114,7 @@ func NewAuthenticationController(mgr manager.Manager, options RayClusterReconcil
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=operator.openshift.io,resources=kubeapiservers,verbs=get;list;watch
 // +kubebuilder:rbac:groups=operator.openshift.io,resources=kubeapiservers/status,verbs=get;list;watch
@@ -107,7 +137,7 @@ func (r *AuthenticationController) Reconcile(ctx context.Context, req ctrl.Reque
 	// Get the RayCluster - this should always be a RayCluster now due to proper mapping
 	rayCluster := &rayv1.RayCluster{}
 	if err := r.Get(ctx, req.NamespacedName, rayCluster); err != nil {
-		if errors.IsNotFound(err) {
+		if k8serrors.IsNotFound(err) {
 			logger.Info("RayCluster not found, likely deleted - checking for orphaned resources")
 			// Clean up any orphaned ReferenceGrants in this namespace
 			if err := r.cleanupOrphanedReferenceGrant(ctx, req.Namespace, logger); err != nil {
@@ -149,12 +179,15 @@ func (r *AuthenticationController) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	if err != nil {
+		if errors.Is(err, errAutoscalerRoleBindingPending) {
+			logger.Info("Autoscaler RoleBinding not ready yet, requeueing", "cluster", rayCluster.Name)
+			return ctrl.Result{RequeueAfter: MediumRequeueDelay}, nil
+		}
 		logger.Error(err, "Failed to handle authentication configuration")
 		return ctrl.Result{RequeueAfter: MediumRequeueDelay}, err
 	}
 
 	logger.Info("Successfully reconciled authentication", "cluster", rayCluster.Name)
-	// Don't requeue on success - let watches trigger next reconciliation
 	return ctrl.Result{}, nil
 }
 
@@ -289,6 +322,14 @@ func (r *AuthenticationController) handleOIDCConfiguration(ctx context.Context, 
 func (r *AuthenticationController) ensureOIDCResources(ctx context.Context, cluster *rayv1.RayCluster, authMode utils.AuthenticationMode, logger logr.Logger) error {
 	if err := r.ensureServiceAccount(ctx, cluster, authMode, logger); err != nil {
 		return fmt.Errorf("failed to ensure service account: %w", err)
+	}
+
+	pending, err := r.ensureAutoscalerRoleBindingForAuthSA(ctx, cluster, authMode, logger)
+	if err != nil {
+		return fmt.Errorf("failed to ensure autoscaler RoleBinding includes auth SA: %w", err)
+	}
+	if pending {
+		return errAutoscalerRoleBindingPending
 	}
 
 	// Create ReferenceGrant BEFORE HTTPRoute to enable cross-namespace service references
@@ -542,7 +583,7 @@ func (r *AuthenticationController) cleanupOldHTTPRouteFromClusterNamespace(ctx c
 
 	err := r.Get(ctx, client.ObjectKey{Name: oldHttpRouteName, Namespace: cluster.Namespace}, oldHttpRoute)
 	if err != nil {
-		if errors.IsNotFound(err) {
+		if k8serrors.IsNotFound(err) {
 			// No old HTTPRoute to clean up - this is the normal case
 			logger.V(1).Info("No old HTTPRoute found in cluster namespace (already migrated or never existed)",
 				"name", oldHttpRouteName,
@@ -568,7 +609,7 @@ func (r *AuthenticationController) cleanupOldHTTPRouteFromClusterNamespace(ctx c
 	}
 
 	if err := r.Delete(ctx, oldHttpRoute); err != nil {
-		if errors.IsNotFound(err) {
+		if k8serrors.IsNotFound(err) {
 			// Already deleted (race condition) - that's fine
 			return nil
 		}
@@ -704,7 +745,7 @@ func (r *AuthenticationController) cleanupReferenceGrant(ctx context.Context, cl
 		grant := &gatewayv1beta1.ReferenceGrant{}
 		err := r.Get(ctx, client.ObjectKey{Name: grantName, Namespace: cluster.Namespace}, grant)
 		if err != nil {
-			if errors.IsNotFound(err) {
+			if k8serrors.IsNotFound(err) {
 				logger.Info("ReferenceGrant already deleted", "name", grantName)
 				return nil
 			}
@@ -808,6 +849,50 @@ func (r *AuthenticationController) ensureServiceAccount(ctx context.Context, clu
 	}
 
 	return nil
+}
+
+// ensureAutoscalerRoleBindingForAuthSA patches the autoscaler RoleBinding to include the auth proxy SA.
+// Returns pending=true when the RayCluster reconciler has not created the RoleBinding yet.
+func (r *AuthenticationController) ensureAutoscalerRoleBindingForAuthSA(ctx context.Context, cluster *rayv1.RayCluster, authMode utils.AuthenticationMode, logger logr.Logger) (pending bool, err error) {
+	if !utils.IsAutoscalingEnabled(&cluster.Spec) {
+		return false, nil
+	}
+
+	namer := utils.NewResourceNamer(cluster)
+	authSAName := namer.ServiceAccountName(authMode)
+
+	roleBinding := &rbacv1.RoleBinding{}
+	namespacedName := common.RayClusterAutoscalerRoleBindingNamespacedName(cluster)
+	if err := r.Get(ctx, namespacedName, roleBinding); err != nil {
+		if k8serrors.IsNotFound(err) {
+			logger.Info("Autoscaler RoleBinding does not exist yet, will retry auth SA patch", "cluster", cluster.Name)
+			return true, nil
+		}
+		return false, fmt.Errorf("failed to get autoscaler RoleBinding: %w", err)
+	}
+
+	for _, s := range roleBinding.Subjects {
+		if s.Kind == rbacv1.ServiceAccountKind && s.Name == authSAName && s.Namespace == cluster.Namespace {
+			return false, nil
+		}
+	}
+
+	patch := client.MergeFrom(roleBinding.DeepCopy())
+	roleBinding.Subjects = append(roleBinding.Subjects, rbacv1.Subject{
+		Kind:      rbacv1.ServiceAccountKind,
+		Name:      authSAName,
+		Namespace: cluster.Namespace,
+	})
+
+	if err := r.Patch(ctx, roleBinding, patch); err != nil {
+		return false, fmt.Errorf("failed to patch autoscaler RoleBinding with auth SA: %w", err)
+	}
+
+	logger.Info("Added auth proxy SA to autoscaler RoleBinding",
+		"roleBinding", namespacedName,
+		"authServiceAccount", authSAName,
+		"mode", authMode)
+	return false, nil
 }
 
 // ensureOAuthServiceAccount creates or updates the OAuth service account
@@ -1014,7 +1099,7 @@ func (r *AuthenticationController) cleanupOrphanedReferenceGrant(ctx context.Con
 		grant := &gatewayv1beta1.ReferenceGrant{}
 		err := r.Get(ctx, client.ObjectKey{Name: grantName, Namespace: namespace}, grant)
 		if err != nil {
-			if errors.IsNotFound(err) {
+			if k8serrors.IsNotFound(err) {
 				logger.Info("No orphaned ReferenceGrant found", "namespace", namespace)
 				return nil
 			}

@@ -1284,6 +1284,12 @@ func (r *RayClusterReconciler) buildHeadPod(ctx context.Context, instance rayv1.
 	logger.Info("head pod labels", "labels", podConf.Labels)
 	creatorCRDType := getCreatorCRDType(instance)
 	pod := common.BuildPod(ctx, podConf, rayv1.HeadNode, instance.Spec.HeadGroupSpec.RayStartParams, headPort, autoscalingEnabled, creatorCRDType, fqdnRayIP)
+	if r.isMTLSEnabled(&instance) {
+		// With mTLS, --node-ip-address is the head service FQDN (see setMissingRayStartParams).
+		// Inject loopback RAY_ADDRESS after BuildPod so ray-head and autoscaler connect to GCS
+		// via 127.0.0.1, avoiding TLS SNI failures when using the pod IP.
+		r.injectMTLSLoopbackRayAddress(&pod, headPort)
+	}
 	// Set raycluster instance as the owner and controller
 	if err := controllerutil.SetControllerReference(&instance, &pod, r.Scheme); err != nil {
 		logger.Error(err, "Failed to set controller reference for raycluster pod")
@@ -1367,8 +1373,79 @@ func (r *RayClusterReconciler) configureMTLSForPod(podTemplate *corev1.PodTempla
 		r.addCertVolumeMounts(&podTemplate.Spec.InitContainers[i])
 	}
 
+	// For head pods, prepend an init container that waits until the TLS certificate
+	// issued by cert-manager includes the pod's actual IP as an IP SAN. Without this,
+	// there is a race condition: cert-manager issues the initial certificate before the
+	// pod IP is known (so only the FQDN DNS SAN is present), and GCS loads this
+	// incomplete certificate at startup. Python clients that connect via the pod IP
+	// (after resolving the FQDN) then fail TLS verification because no IP SAN matches.
+	// Blocking GCS startup until the cert carries the pod's IP SAN eliminates the race.
+	if !isWorker && len(podTemplate.Spec.Containers) > 0 {
+		waitScript := `POD_IP="${MY_POD_IP}"
+CERT="/home/ray/workspace/tls/tls.crt"
+echo "Waiting for TLS cert to include IP SAN for ${POD_IP}..."
+while true; do
+  if openssl x509 -in "${CERT}" -noout -text 2>/dev/null | grep -q "IP Address:${POD_IP}"; then
+    echo "TLS cert now includes IP SAN for ${POD_IP}"
+    exit 0
+  fi
+  echo "IP SAN for ${POD_IP} not yet in cert, retrying in 5s..."
+  sleep 5
+done`
+		waitInitContainer := corev1.Container{
+			Name:  "wait-for-tls-ip-san",
+			Image: podTemplate.Spec.Containers[0].Image,
+			Env: []corev1.EnvVar{
+				{
+					Name: "MY_POD_IP",
+					ValueFrom: &corev1.EnvVarSource{
+						FieldRef: &corev1.ObjectFieldSelector{
+							FieldPath: "status.podIP",
+						},
+					},
+				},
+			},
+			VolumeMounts: []corev1.VolumeMount{
+				{
+					Name:      "ray-tls-vol",
+					MountPath: "/home/ray/workspace/tls",
+					ReadOnly:  true,
+				},
+			},
+			Command: []string{"sh", "-c"},
+			Args:    []string{waitScript},
+		}
+		podTemplate.Spec.InitContainers = append([]corev1.Container{waitInitContainer}, podTemplate.Spec.InitContainers...)
+	}
+
 	// Add CA volumes with proper secret references
 	r.addCAVolumes(&podTemplate.Spec, secretName)
+}
+
+// injectMTLSLoopbackRayAddress sets RAY_ADDRESS=127.0.0.1:port on ray-head and autoscaler.
+// Called only when mTLS is enabled for the RayCluster.
+func (r *RayClusterReconciler) injectMTLSLoopbackRayAddress(pod *corev1.Pod, headPort string) {
+	loopbackAddress := fmt.Sprintf("%s:%s", utils.LOCAL_HOST, headPort)
+	for i := range pod.Spec.Containers {
+		container := &pod.Spec.Containers[i]
+		if i != utils.RayContainerIndex && container.Name != common.AutoscalerContainerName {
+			continue
+		}
+		found := false
+		for j, env := range container.Env {
+			if env.Name == utils.RAY_ADDRESS {
+				container.Env[j].Value = loopbackAddress
+				found = true
+				break
+			}
+		}
+		if !found {
+			container.Env = append(container.Env, corev1.EnvVar{
+				Name:  utils.RAY_ADDRESS,
+				Value: loopbackAddress,
+			})
+		}
+	}
 }
 
 // addTLSEnvironmentVariables adds Ray TLS environment variables to a container
@@ -1979,14 +2056,14 @@ func (r *RayClusterReconciler) reconcileAutoscalerRoleBinding(ctx context.Contex
 		if err := r.Create(ctx, roleBinding); err != nil {
 			if errors.IsAlreadyExists(err) {
 				logger.Info("role binding already exist, no need to create")
-				return nil
+			} else {
+				r.Recorder.Eventf(instance, corev1.EventTypeWarning, string(utils.FailedToCreateRoleBinding), "Failed creating role binding %s/%s, %v", roleBinding.Namespace, roleBinding.Name, err)
+				return err
 			}
-			r.Recorder.Eventf(instance, corev1.EventTypeWarning, string(utils.FailedToCreateRoleBinding), "Failed creating role binding %s/%s, %v", roleBinding.Namespace, roleBinding.Name, err)
-			return err
+		} else {
+			logger.Info("Created role binding for Ray Autoscaler", "name", roleBinding.Name)
+			r.Recorder.Eventf(instance, corev1.EventTypeNormal, string(utils.CreatedRoleBinding), "Created role binding %s/%s", roleBinding.Namespace, roleBinding.Name)
 		}
-		logger.Info("Created role binding for Ray Autoscaler", "name", roleBinding.Name)
-		r.Recorder.Eventf(instance, corev1.EventTypeNormal, string(utils.CreatedRoleBinding), "Created role binding %s/%s", roleBinding.Namespace, roleBinding.Name)
-		return nil
 	}
 
 	return nil

@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -46,6 +47,7 @@ import (
 func setupScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
 	_ = corev1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
 	_ = rayv1.AddToScheme(s)
 	_ = configv1.AddToScheme(s)
 	_ = routev1.AddToScheme(s)
@@ -1169,4 +1171,232 @@ func TestEnforceEnableIngressFalseOnOpenShift_Idempotency(t *testing.T) {
 	require.NotNil(t, updated.Spec.HeadGroupSpec.EnableIngress)
 	assert.False(t, *updated.Spec.HeadGroupSpec.EnableIngress,
 		"EnableIngress should be false after multiple enforcements")
+}
+
+func TestEnsureAutoscalerRoleBindingForAuthSA(t *testing.T) {
+	tests := []struct {
+		cluster        *rayv1.RayCluster
+		existingRB     *rbacv1.RoleBinding
+		name           string
+		authMode       utils.AuthenticationMode
+		expectSubjects int
+		expectPending  bool
+		expectAuthSA   bool
+		expectNoUpdate bool
+	}{
+		{
+			name: "Autoscaling disabled - no-op",
+			cluster: &rayv1.RayCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster",
+					Namespace: "default",
+					UID:       "test-uid",
+				},
+				Spec: rayv1.RayClusterSpec{
+					EnableInTreeAutoscaling: ptr.To(false),
+				},
+			},
+			existingRB:     nil,
+			authMode:       utils.ModeIntegratedOAuth,
+			expectSubjects: 0,
+			expectAuthSA:   false,
+			expectNoUpdate: true,
+		},
+		{
+			name: "RoleBinding does not exist yet - pending",
+			cluster: &rayv1.RayCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster",
+					Namespace: "default",
+					UID:       "test-uid",
+				},
+				Spec: rayv1.RayClusterSpec{
+					EnableInTreeAutoscaling: ptr.To(true),
+				},
+			},
+			existingRB:     nil,
+			authMode:       utils.ModeIntegratedOAuth,
+			expectPending:  true,
+			expectSubjects: 0,
+			expectAuthSA:   false,
+			expectNoUpdate: true,
+		},
+		{
+			name: "RoleBinding exists - adds OAuth proxy SA",
+			cluster: &rayv1.RayCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster",
+					Namespace: "default",
+					UID:       "test-uid",
+				},
+				Spec: rayv1.RayClusterSpec{
+					EnableInTreeAutoscaling: ptr.To(true),
+				},
+			},
+			existingRB: &rbacv1.RoleBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster",
+					Namespace: "default",
+				},
+				Subjects: []rbacv1.Subject{
+					{
+						Kind:      rbacv1.ServiceAccountKind,
+						Name:      "test-cluster",
+						Namespace: "default",
+					},
+				},
+				RoleRef: rbacv1.RoleRef{
+					APIGroup: rbacv1.GroupName,
+					Kind:     "Role",
+					Name:     "test-cluster",
+				},
+			},
+			authMode:       utils.ModeIntegratedOAuth,
+			expectSubjects: 2,
+			expectAuthSA:   true,
+		},
+		{
+			name: "RoleBinding exists - adds OIDC proxy SA",
+			cluster: &rayv1.RayCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster",
+					Namespace: "default",
+					UID:       "test-uid",
+				},
+				Spec: rayv1.RayClusterSpec{
+					EnableInTreeAutoscaling: ptr.To(true),
+				},
+			},
+			existingRB: &rbacv1.RoleBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster",
+					Namespace: "default",
+				},
+				Subjects: []rbacv1.Subject{
+					{
+						Kind:      rbacv1.ServiceAccountKind,
+						Name:      "test-cluster",
+						Namespace: "default",
+					},
+				},
+				RoleRef: rbacv1.RoleRef{
+					APIGroup: rbacv1.GroupName,
+					Kind:     "Role",
+					Name:     "test-cluster",
+				},
+			},
+			authMode:       utils.ModeOIDC,
+			expectSubjects: 2,
+			expectAuthSA:   true,
+		},
+		{
+			name: "Auth SA already present - idempotent",
+			cluster: &rayv1.RayCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster",
+					Namespace: "default",
+					UID:       "test-uid",
+				},
+				Spec: rayv1.RayClusterSpec{
+					EnableInTreeAutoscaling: ptr.To(true),
+				},
+			},
+			existingRB: func() *rbacv1.RoleBinding {
+				cluster := &rayv1.RayCluster{ObjectMeta: metav1.ObjectMeta{Name: "test-cluster", Namespace: "default"}}
+				namer := utils.NewResourceNamer(cluster)
+				return &rbacv1.RoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-cluster",
+						Namespace: "default",
+					},
+					Subjects: []rbacv1.Subject{
+						{
+							Kind:      rbacv1.ServiceAccountKind,
+							Name:      "test-cluster",
+							Namespace: "default",
+						},
+						{
+							Kind:      rbacv1.ServiceAccountKind,
+							Name:      namer.ServiceAccountName(utils.ModeIntegratedOAuth),
+							Namespace: "default",
+						},
+					},
+					RoleRef: rbacv1.RoleRef{
+						APIGroup: rbacv1.GroupName,
+						Kind:     "Role",
+						Name:     "test-cluster",
+					},
+				}
+			}(),
+			authMode:       utils.ModeIntegratedOAuth,
+			expectSubjects: 2,
+			expectAuthSA:   true,
+			expectNoUpdate: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := setupScheme()
+
+			objects := []runtime.Object{tc.cluster}
+			if tc.existingRB != nil {
+				objects = append(objects, tc.existingRB)
+			}
+
+			fakeClient := clientFake.NewClientBuilder().
+				WithScheme(s).
+				WithRuntimeObjects(objects...).
+				Build()
+
+			controller := &AuthenticationController{
+				Client:   fakeClient,
+				Scheme:   s,
+				Recorder: record.NewFakeRecorder(10),
+			}
+
+			pending, err := controller.ensureAutoscalerRoleBindingForAuthSA(ctx, tc.cluster, tc.authMode, ctrl.Log)
+			require.NoError(t, err)
+			assert.Equal(t, tc.expectPending, pending)
+
+			if tc.existingRB == nil {
+				rb := &rbacv1.RoleBinding{}
+				err = fakeClient.Get(ctx, types.NamespacedName{
+					Name:      tc.cluster.Name,
+					Namespace: tc.cluster.Namespace,
+				}, rb)
+				assert.True(t, errors.IsNotFound(err), "RoleBinding should not be created")
+				return
+			}
+
+			rb := &rbacv1.RoleBinding{}
+			err = fakeClient.Get(ctx, types.NamespacedName{
+				Name:      tc.cluster.Name,
+				Namespace: tc.cluster.Namespace,
+			}, rb)
+			require.NoError(t, err)
+			assert.Len(t, rb.Subjects, tc.expectSubjects)
+
+			if tc.expectNoUpdate {
+				assert.Equal(t, tc.existingRB.Subjects, rb.Subjects, "Subjects should remain unchanged")
+				return
+			}
+
+			if tc.expectAuthSA {
+				namer := utils.NewResourceNamer(tc.cluster)
+				expectedSA := namer.ServiceAccountName(tc.authMode)
+				found := false
+				for _, s := range rb.Subjects {
+					if s.Kind == rbacv1.ServiceAccountKind &&
+						s.Name == expectedSA &&
+						s.Namespace == tc.cluster.Namespace {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "Auth SA %s should be in RoleBinding subjects", expectedSA)
+			}
+		})
+	}
 }
