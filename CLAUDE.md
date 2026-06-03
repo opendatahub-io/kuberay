@@ -16,6 +16,25 @@ custom resources. Go-based operator using Kubebuilder framework.
 | `config/` | Operator configuration and CRD manifests |
 | `scripts/` | Build and utility scripts |
 
+### Where to Make Changes
+
+| Task | Location |
+|---|---|
+| CRD types (RayCluster, RayJob, RayService) | `ray-operator/apis/ray/v1/` |
+| Controller reconciliation logic | `ray-operator/controllers/ray/` |
+| Webhooks (validation and defaulting) | `ray-operator/pkg/webhooks/v1/` |
+| E2e tests | `ray-operator/test/e2e/`, `ray-operator/test/e2eautoscaler/`, `ray-operator/test/e2eupgrade/`, `ray-operator/test/e2erayservice/` |
+| Unit tests | Adjacent `*_test.go` or `*_unit_test.go` next to source |
+| E2e test helpers | `ray-operator/test/support/` |
+| Kustomize overlays (OpenShift/midstream) | `ray-operator/config/openshift/` |
+| Kustomize base (CRDs, RBAC, webhook) | `ray-operator/config/default/`, `ray-operator/config/crd/`, `ray-operator/config/rbac/`, `ray-operator/config/webhook/` |
+| Generated clients (clientset, apply configs) | `ray-operator/pkg/client/` |
+| CI workflows | `.github/workflows/` |
+| Codegen scripts | `ray-operator/hack/`, then `make manifests generate` |
+| Midstream Makefile (e2e image builds) | Root `Makefile` |
+| Pre-commit config | `.pre-commit-config.yaml` |
+| Linter config | `.golangci.yml` |
+
 ## Build and Test Commands
 
 ```sh
@@ -142,7 +161,7 @@ Real examples for the most common change types. Follow these patterns, not descr
 
 ### Adding a new CRD field
 
-See `AuthenticationReady` in `ray-operator/apis/ray/v1/raycluster_types.go` (line 294).
+See `AuthenticationReady` in `ray-operator/apis/ray/v1/raycluster_types.go`.
 Pattern: add a typed constant or struct field with a godoc comment, wire it into
 the controller, then add an e2e test. After changing types, regenerate:
 
@@ -152,21 +171,21 @@ cd ray-operator && make manifests generate
 
 ### Adding or modifying a controller reconciler
 
-See `RayClusterReconciler.Reconcile` in `ray-operator/controllers/ray/raycluster_controller.go`
-(line 124). The thin `Reconcile` method fetches the CR and delegates to `rayClusterReconcile`
-(line 163), which calls sub-reconcilers (`reconcilePods`, `reconcileHeadService`, etc.).
+See `RayClusterReconciler.Reconcile` in `ray-operator/controllers/ray/raycluster_controller.go`.
+The thin `Reconcile` method fetches the CR and delegates to `rayClusterReconcile`,
+which calls sub-reconcilers (`reconcilePods`, `reconcileHeadService`, etc.).
 New reconciliation logic goes in a sub-reconciler, not inline in the top-level method.
 
 ### Adding an e2e test
 
-See `TestRayJob` in `ray-operator/test/e2e/rayjob_test.go` (line 18).
+See `TestRayJob` in `ray-operator/test/e2e/rayjob_test.go`.
 Pattern: `test := With(t)` for support helpers, `test.NewTestNamespace()` for isolation,
 apply resources via `test.Client().Core()...Apply(...)`, assert with `Eventually` +
 Gomega. Support helpers live in `ray-operator/test/support/`.
 
 ### Midstream carry patch
 
-See commit `17fbd87` — `CARRY: task(RHOAIENG-59432): fix RoleBinding for autoscaling`.
+See `CARRY: task(RHOAIENG-59432): fix RoleBinding for autoscaling`.
 Pattern: `CARRY:` prefix, Jira key in subject, scoped to the minimum diff. Carries are
 upstream-unmergeable fixes specific to RHOAI/ODH. They touch controller logic, RBAC,
 and corresponding unit tests.
