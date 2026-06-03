@@ -136,6 +136,50 @@ This is a multi-module repo with three main Go modules:
 
 When making changes, run `go mod tidy` in the relevant module directory.
 
+## Pattern References
+
+Real examples for the most common change types. Follow these patterns, not descriptions.
+
+### Adding a new CRD field
+
+See `AuthenticationReady` in `ray-operator/apis/ray/v1/raycluster_types.go` (line 294).
+Pattern: add a typed constant or struct field with a godoc comment, wire it into
+the controller, then add an e2e test. After changing types, regenerate:
+
+```sh
+cd ray-operator && make manifests generate
+```
+
+### Adding or modifying a controller reconciler
+
+See `RayClusterReconciler.Reconcile` in `ray-operator/controllers/ray/raycluster_controller.go`
+(line 124). The thin `Reconcile` method fetches the CR and delegates to `rayClusterReconcile`
+(line 163), which calls sub-reconcilers (`reconcilePods`, `reconcileHeadService`, etc.).
+New reconciliation logic goes in a sub-reconciler, not inline in the top-level method.
+
+### Adding an e2e test
+
+See `TestRayJob` in `ray-operator/test/e2e/rayjob_test.go` (line 18).
+Pattern: `test := With(t)` for support helpers, `test.NewTestNamespace()` for isolation,
+apply resources via `test.Client().Core()...Apply(...)`, assert with `Eventually` +
+Gomega. Support helpers live in `ray-operator/test/support/`.
+
+### Midstream carry patch
+
+See commit `17fbd87` — `CARRY: task(RHOAIENG-59432): fix RoleBinding for autoscaling`.
+Pattern: `CARRY:` prefix, Jira key in subject, scoped to the minimum diff. Carries are
+upstream-unmergeable fixes specific to RHOAI/ODH. They touch controller logic, RBAC,
+and corresponding unit tests.
+
+### Kustomize overlay or webhook change
+
+- **Webhook**: `ray-operator/pkg/webhooks/v1/raycluster_mutating_webhook.go` — OpenShift-
+  specific defaults (e.g. enforce `EnableSecureTrustedNetwork`, disable `EnableIngress`).
+  Unit tests are adjacent: `raycluster_mutating_webhook_unit_test.go`.
+- **Kustomize**: `ray-operator/config/openshift/kustomization.yaml` — composes `../default`,
+  adds `webhook.yaml`, and applies patches like `webhook-deployment-patch.yaml` and
+  `kuberay-operator-image-patch.yaml`.
+
 ## Documentation
 
 User-facing docs: <https://docs.ray.io/en/latest/cluster/kubernetes/>
