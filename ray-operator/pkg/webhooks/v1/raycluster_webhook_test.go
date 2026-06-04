@@ -14,6 +14,29 @@ import (
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 )
 
+func minimalHeadGroupSpec() rayv1.HeadGroupSpec {
+	return rayv1.HeadGroupSpec{
+		RayStartParams: map[string]string{},
+		Template: corev1.PodTemplateSpec{
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{},
+			},
+		},
+	}
+}
+
+func minimalWorkerGroupSpec(groupName string) rayv1.WorkerGroupSpec {
+	return rayv1.WorkerGroupSpec{
+		GroupName:      groupName,
+		RayStartParams: map[string]string{},
+		Template: corev1.PodTemplateSpec{
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{},
+			},
+		},
+	}
+}
+
 var _ = Describe("RayCluster validating webhook", func() {
 	Context("when name is too long", func() {
 		It("should return error", func() {
@@ -24,13 +47,7 @@ var _ = Describe("RayCluster validating webhook", func() {
 					Name:      longName,
 				},
 				Spec: rayv1.RayClusterSpec{
-					HeadGroupSpec: rayv1.HeadGroupSpec{
-						Template: corev1.PodTemplateSpec{
-							Spec: corev1.PodSpec{
-								Containers: []corev1.Container{},
-							},
-						},
-					},
+					HeadGroupSpec:    minimalHeadGroupSpec(),
 					WorkerGroupSpecs: []rayv1.WorkerGroupSpec{},
 				},
 			}
@@ -50,13 +67,7 @@ var _ = Describe("RayCluster validating webhook", func() {
 					Name:      "invalid.name",
 				},
 				Spec: rayv1.RayClusterSpec{
-					HeadGroupSpec: rayv1.HeadGroupSpec{
-						Template: corev1.PodTemplateSpec{
-							Spec: corev1.PodSpec{
-								Containers: []corev1.Container{},
-							},
-						},
-					},
+					HeadGroupSpec:    minimalHeadGroupSpec(),
 					WorkerGroupSpecs: []rayv1.WorkerGroupSpec{},
 				},
 			}
@@ -84,30 +95,10 @@ var _ = Describe("RayCluster validating webhook", func() {
 					Namespace: namespace,
 				},
 				Spec: rayv1.RayClusterSpec{
-					HeadGroupSpec: rayv1.HeadGroupSpec{
-						Template: corev1.PodTemplateSpec{
-							Spec: corev1.PodSpec{
-								Containers: []corev1.Container{},
-							},
-						},
-					},
+					HeadGroupSpec: minimalHeadGroupSpec(),
 					WorkerGroupSpecs: []rayv1.WorkerGroupSpec{
-						{
-							GroupName: "group1",
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{
-									Containers: []corev1.Container{},
-								},
-							},
-						},
-						{
-							GroupName: "group1",
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{
-									Containers: []corev1.Container{},
-								},
-							},
-						},
+						minimalWorkerGroupSpec("group1"),
+						minimalWorkerGroupSpec("group1"),
 					},
 				},
 			}

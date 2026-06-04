@@ -91,6 +91,8 @@ var _ = BeforeSuite(func() {
 	})
 	Expect(err).NotTo(HaveOccurred())
 
+	err = SetupRayClusterDefaulterWithManager(mgr)
+	Expect(err).NotTo(HaveOccurred())
 	err = SetupRayClusterWebhookWithManager(mgr)
 	Expect(err).NotTo(HaveOccurred())
 	err = SetupRayJobWebhookWithManager(mgr)

@@ -14,72 +14,99 @@ concurrency:
   group: ${{ github.head_ref }}-${{ github.workflow }}
   cancel-in-progress: true
 
+env:
+  OPERATOR_IMG: quay.io/opendatahub/kuberay-operator:dev
+  KUBERAY_TEST_TIMEOUT_SHORT: 5m
+  KUBERAY_TEST_TIMEOUT_MEDIUM: 12m
+  KUBERAY_TEST_TIMEOUT_LONG: 15m
+  KUBERAY_TEST_RAY_IMAGE: rayproject/ray:2.52.1
+
 jobs:
-  build:
+  build-operator:
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false) }}
     steps:
-        - name: Checkout code
-          uses: actions/checkout@v3
-          with:
-            submodules: recursive
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
 
-        - name: Set up Go
-          uses: actions/setup-go@v3
-          with:
-            go-version: v1.22
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: v1.22
 
-        - name: Set up gotestfmt
-          uses: gotesttools/gotestfmt-action@v2
-          with:
-            token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build operator image
+        run: |
+          cd ray-operator
+          make docker-build IMG="${OPERATOR_IMG}" ENGINE=docker
+          docker save -o /tmp/operator.tar "${OPERATOR_IMG}"
 
-        - name: Setup and start KinD cluster
-          uses: ./.github/workflows/actions/kind
+      - name: Upload operator image
+        uses: actions/upload-artifact@v4
+        with:
+          name: operator-image
+          retention-days: 1
+          path: /tmp/operator.tar
 
-        - name: Deploy Kuberay operator
-          id: deploy
-          run: |
-            echo "Deploying Kuberay operator"
-            cd ray-operator
+  e2e-rayjob:
+    needs: build-operator
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - TestRayJob
+          - TestRayJobSuspend
+          - TestRayJobLightWeightMode
+          - TestRayJobWithClusterSelector
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
 
-            IMG=quay.io/opendatahub/kuberay-operator:dev
-            make docker-build -e IMG="${IMG}" -e ENGINE=docker
-            kind load docker-image ${IMG}
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: v1.22
 
-            make deploy -e IMG="${IMG}"
-            kubectl wait --timeout=90s --for=condition=Available=true deployment -n default kuberay-operator
+      - name: Set up gotestfmt
+        uses: gotesttools/gotestfmt-action@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-        - name: Update resource requirements for e2e tests
-          if: steps.deploy.outcome == 'success'
-          run: |
-            echo "Updating resource requirements using Go AST manipulation..."
-            cd scripts
-            go build -o update-resources update-resources.go
-            ./update-resources -scenario pr ../ray-operator/test/e2e/support.go
-            echo "Resource requirements updated successfully for e2e tests."
+      - name: Download operator image
+        uses: actions/download-artifact@v4
+        with:
+          name: operator-image
 
-        - name: Run e2e tests
-          if: steps.deploy.outcome == 'success'
-          run: |
-            export KUBERAY_TEST_TIMEOUT_SHORT=5m KUBERAY_TEST_TIMEOUT_MEDIUM=12m KUBERAY_TEST_TIMEOUT_LONG=15m KUBERAY_TEST_RAY_IMAGE=rayproject/ray:2.52.1
+      - name: Load operator image
+        run: docker load -i operator.tar
 
-            set -euo pipefail
-            cd ray-operator
-            # only test the subset of tests - the rest will be tested post-merge
-            go test -timeout 120m -p 1 -parallel 1 -v -run '^(TestRayJobWithClusterSelector|TestRayJob|TestRayJobSuspend|TestRayJobLightWeightMode)$' ./test/e2e -json 2>&1 | tee ./gotest.log | gotestfmt
+      - name: Setup and start KinD cluster
+        uses: ./.github/workflows/actions/kind
 
-        - name: Print KubeRay operator logs
-          if: steps.deploy.outcome == 'success'
-          run: |
-            echo "Printing KubeRay operator logs"
-            kubectl logs -n default --tail -1 -l app.kubernetes.io/name=kuberay-operator app.kubernetes.io/name=kuberay | tee ./kuberay-operator.log
+      - name: Run RayJob e2e test
+        env:
+          IMG: ${{ env.OPERATOR_IMG }}
+          SKIP_BUILD: "1"
+        run: |
+          chmod +x ./scripts/run-e2e-rayjob-kind.sh
+          ./scripts/run-e2e-rayjob-kind.sh --json --test "${{ matrix.test }}"
 
-        - name: Upload logs
-          if: failure()
-          uses: actions/upload-artifact@v4
-          with:
-            name: logs
-            retention-days: 10
-            path: |
-              **/*.log
+      - name: Print KubeRay operator logs
+        if: always()
+        run: |
+          echo "Printing KubeRay operator logs"
+          kubectl logs -n default --tail=-1 -l app.kubernetes.io/name=kuberay-operator | tee "./kuberay-operator-${{ matrix.test }}.log"
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.test }}
+          retention-days: 10
+          path: |
+            **/*.log
