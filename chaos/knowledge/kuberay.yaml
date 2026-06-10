@@ -69,7 +69,8 @@ components:
         type: mutating
         path: /mutate-ray-io-v1-raycluster
     finalizers:
-      - ray.io/finalizer
+      - ray.io/gcs-ft-redis-cleanup-finalizer
+      - ray.io/rayjob-finalizer
     steadyState:
       checks:
         - type: conditionTrue
