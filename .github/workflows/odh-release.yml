@@ -1,4 +1,4 @@
-# This workflow will compile e2e tests and release them
+# Creates GitHub releases for midstream version tags.
 
 name: ODH Release
 on:
@@ -25,12 +25,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: v1.22
-        cache-dependency-path: "ray-operator/go.sum"
-
     - name: Verify that release doesn't exist yet
       shell: bash {0}
       run: |
@@ -43,14 +37,9 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ github.TOKEN }}
 
-    - name: Compile tests
-      run: |
-        go test -c -o compiled-tests/e2e ./test/e2e/
-      working-directory: ray-operator
-
     - name: Creates a release in GitHub
       run: |
-        gh release create $KUBERAY_RELEASE_VERSION --target $GITHUB_SHA ray-operator/compiled-tests/*
+        gh release create $KUBERAY_RELEASE_VERSION --target $GITHUB_SHA
       env:
         GITHUB_TOKEN: ${{ secrets.CODEFLARE_MACHINE_ACCOUNT_TOKEN }}
       shell: bash

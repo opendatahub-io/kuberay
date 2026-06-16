@@ -32,9 +32,9 @@ jobs:
           submodules: recursive
 
       - name: Set up Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v5
         with:
-          go-version: v1.22
+          go-version-file: ray-operator/go.mod
 
       - name: Build operator image
         run: |
@@ -68,9 +68,9 @@ jobs:
           submodules: recursive
 
       - name: Set up Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v5
         with:
-          go-version: v1.22
+          go-version-file: ray-operator/go.mod
 
       - name: Set up gotestfmt
         uses: gotesttools/gotestfmt-action@v2
