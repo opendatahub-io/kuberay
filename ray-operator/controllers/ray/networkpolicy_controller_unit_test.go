@@ -271,17 +271,19 @@ func TestBuildWorkerNetworkPolicy_DenyAllIngress(t *testing.T) {
 	assert.Empty(t, policy.Spec.Egress)
 }
 
-// TestBuildWorkerNetworkPolicy_CustomIngressRules verifies that custom IngressRules are appended to the worker policy.
+// TestBuildWorkerNetworkPolicy_CustomIngressRules verifies that custom Worker.IngressRules are appended to the worker policy.
 func TestBuildWorkerNetworkPolicy_CustomIngressRules(t *testing.T) {
 	setupNetworkPolicyTest(t)
 
 	customPort := intstr.FromInt32(9999)
 	tcpProto := corev1.ProtocolTCP
 	cluster := testRayClusterBasic.DeepCopy()
-	cluster.Spec.NetworkIsolation.IngressRules = []networkingv1.NetworkPolicyIngressRule{
-		{
-			Ports: []networkingv1.NetworkPolicyPort{
-				{Protocol: &tcpProto, Port: &customPort},
+	cluster.Spec.NetworkIsolation.Worker = &rayv1.NetworkPolicyRules{
+		IngressRules: []networkingv1.NetworkPolicyIngressRule{
+			{
+				Ports: []networkingv1.NetworkPolicyPort{
+					{Protocol: &tcpProto, Port: &customPort},
+				},
 			},
 		},
 	}
@@ -405,17 +407,19 @@ func TestBuildHeadNetworkPolicy_WithRayJob(t *testing.T) {
 	require.Len(t, policy.Spec.Ingress, 3)
 }
 
-// TestBuildHeadNetworkPolicy_CustomIngressRules verifies that custom IngressRules are appended after base rules.
+// TestBuildHeadNetworkPolicy_CustomIngressRules verifies that custom Head.IngressRules are appended after base rules.
 func TestBuildHeadNetworkPolicy_CustomIngressRules(t *testing.T) {
 	setupNetworkPolicyTest(t)
 
 	customPort := intstr.FromInt32(9999)
 	tcpProto := corev1.ProtocolTCP
 	cluster := testRayClusterBasic.DeepCopy()
-	cluster.Spec.NetworkIsolation.IngressRules = []networkingv1.NetworkPolicyIngressRule{
-		{
-			Ports: []networkingv1.NetworkPolicyPort{
-				{Protocol: &tcpProto, Port: &customPort},
+	cluster.Spec.NetworkIsolation.Head = &rayv1.NetworkPolicyRules{
+		IngressRules: []networkingv1.NetworkPolicyIngressRule{
+			{
+				Ports: []networkingv1.NetworkPolicyPort{
+					{Protocol: &tcpProto, Port: &customPort},
+				},
 			},
 		},
 	}
@@ -428,17 +432,19 @@ func TestBuildHeadNetworkPolicy_CustomIngressRules(t *testing.T) {
 	assert.Equal(t, &customPort, policy.Spec.Ingress[2].Ports[0].Port)
 }
 
-// TestBuildHeadNetworkPolicy_CustomEgressRules verifies that custom EgressRules are appended after base egress.
+// TestBuildHeadNetworkPolicy_CustomEgressRules verifies that custom Head.EgressRules are appended after base egress.
 func TestBuildHeadNetworkPolicy_CustomEgressRules(t *testing.T) {
 	setupNetworkPolicyTest(t)
 
 	customPort := intstr.FromInt32(8080)
 	tcpProto := corev1.ProtocolTCP
 	cluster := testRayClusterBasic.DeepCopy()
-	cluster.Spec.NetworkIsolation.EgressRules = []networkingv1.NetworkPolicyEgressRule{
-		{
-			Ports: []networkingv1.NetworkPolicyPort{
-				{Protocol: &tcpProto, Port: &customPort},
+	cluster.Spec.NetworkIsolation.Head = &rayv1.NetworkPolicyRules{
+		EgressRules: []networkingv1.NetworkPolicyEgressRule{
+			{
+				Ports: []networkingv1.NetworkPolicyPort{
+					{Protocol: &tcpProto, Port: &customPort},
+				},
 			},
 		},
 	}
