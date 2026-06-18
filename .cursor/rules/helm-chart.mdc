@@ -1,0 +1,34 @@
+---
+description: Conventions and guardrails for Helm charts
+globs: helm-chart/**
+---
+
+# helm-chart
+
+Helm charts for deploying KubeRay components. Three charts, all versioned together.
+
+## Charts
+
+| Chart | Purpose |
+|---|---|
+| `kuberay-operator/` | Operator deployment + CRDs |
+| `kuberay-apiserver/` | APIServer deployment (optional security proxy sidecar) |
+| `ray-cluster/` | Sample RayCluster CR |
+
+## Do Not Edit Directly
+
+- **CRDs** (`kuberay-operator/crds/*.yaml`): synced from `ray-operator/config/crd/bases/` via `make helm` in `ray-operator/`. Edit the Go types in `ray-operator/apis/ray/v1/*_types.go` and regenerate instead.
+- **README.md** files: generated from `README.md.gotmpl` by helm-docs. Edit the `.gotmpl` source file, not the rendered README.
+
+## Testing and Validation
+
+- `make helm-lint` — lint all charts
+- `make helm-unittest` — run helm-unittest tests (in each chart's `tests/` dir)
+- `make helm-docs` — regenerate READMEs from `.gotmpl` templates
+- Pre-commit runs `kubeconform` to validate charts against CRD JSON schemas
+
+## Values Conventions
+
+- Chart values follow the upstream kuberay-operator defaults
+- Security-related values (auth proxy, CORS) are in the `security` block of `kuberay-apiserver`
+- Multi-namespace support is configured via `watchNamespace` in `kuberay-operator`

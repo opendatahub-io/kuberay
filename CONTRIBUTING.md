@@ -31,6 +31,13 @@ Refer to the template for more information on what goes into a PR description.
 
 A contributor proposes a design with a PR on the repository to allow for revisions and discussions. If a design needs to be discussed before formulating a document for it, make use of Google doc and GitHub issue to involve the community on the discussion.
 
+If a PR changes component boundaries, API contracts, or CRD schemas, the corresponding design doc or `DEVELOPMENT.md` must be updated in the same PR (or a linked follow-up). Examples of changes that require doc updates:
+
+- Adding or removing a CRD field in `ray-operator/apis/ray/v1/*_types.go`
+- Changing how controllers interact with webhooks or batch schedulers
+- Modifying the batch scheduler plugin interface
+- Altering the relationship between `ray-operator/` and `apiserver/` modules
+
 ### GitHub Issues
 
 GitHub Issues are used to file bugs, work items, and feature requests with actionable items/issues (Please refer to the "Reporting Bugs/Feature Requests" section below for more information).
@@ -67,6 +74,24 @@ If you run into any merge issues, checkout this [git tutorial](https://lab.githu
 ### Release Acknowledgements
 
 Once your PR is merged, your contributions will be acknowledged in every release, see [CHANGELOG](./CHANGELOG.md) for more details.
+
+## Maintaining AI Context
+
+This repository includes context files that help AI coding agents work reliably in the codebase:
+`CLAUDE.md` (root conventions), `.cursor/rules/` and `.claude/rules/` (module-specific rules).
+
+### When to update context files
+
+- **Reviewer catches a pattern issue on an AI-generated PR:** add a rule to the relevant `.cursor/rules/` file or `CLAUDE.md` to prevent the same mistake
+- **New generated files or API surfaces added:** update the generated files registry in `CLAUDE.md`
+- **Module boundaries change:** update the corresponding `.cursor/rules/` file and `depguard` rules in `.golangci.yml`
+
+### Rule lifecycle
+
+- New rules should be specific and actionable (e.g., "never edit `zz_generated.deepcopy.go`")
+- Prefer lint rules over prose warnings — lint rules are deterministic and enforced in CI
+- Periodically audit context files: remove lines that no longer prevent real failures
+- Treat context files as a living list of codebase conventions, not permanent configuration
 
 ## Finding contributions to work on
 

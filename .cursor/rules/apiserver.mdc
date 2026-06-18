@@ -1,0 +1,39 @@
+---
+description: Conventions and guardrails for the apiserver module
+globs: apiserver/**
+---
+
+# apiserver
+
+Optional REST/gRPC API server for managing Ray resources. Alpha quality.
+**APIServer V1 is deprecated** — V2 lives in `apiserversdk/` (see `apiserversdk/docs/migration.md`).
+
+## Architecture
+
+```
+cmd/main.go        — boots gRPC + HTTP gateway, wires all components
+pkg/server/        — gRPC service implementations (one per resource kind)
+pkg/manager/       — business logic layer, CRUD orchestration against Ray CRDs
+pkg/client/        — Kubernetes client wrappers (one per resource kind)
+pkg/model/         — proto <-> K8s CRD data conversion
+pkg/util/          — helpers, defaults, error types
+pkg/interceptor/   — gRPC interceptors (logging, etc.)
+```
+
+## Generated Files — Do Not Edit
+
+- `pkg/swagger/datafile.go` — Swagger UI assets via go-bindata, regenerate with `make build-swagger`
+- `*_mock.go` — MockGen mocks (`pkg/client/`, `pkg/manager/`)
+
+## Dependencies
+
+- Protobuf API definitions: `proto/go_client/` (generated from `proto/*.proto`)
+- Ray CRD types: `ray-operator/apis/ray/v1`
+- Ray typed client: `ray-operator/pkg/client/`
+
+## Commands
+
+- `make test` — unit tests
+- `make e2e-test` — end-to-end tests
+- `make build-swagger` — regenerate Swagger UI assets
+- `make start-local-apiserver` — full local stack (kind + operator + apiserver)

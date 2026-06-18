@@ -17,3 +17,8 @@
   - [ ] Unit tests
   - [ ] Manual tests
   - [ ] This PR is not tested :(
+
+## Architecture
+
+- [ ] This PR does not change component boundaries or API contracts
+- [ ] OR: I have updated the relevant design doc / DEVELOPMENT.md

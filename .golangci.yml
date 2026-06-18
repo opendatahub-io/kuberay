@@ -1,4 +1,15 @@
 linters-settings:
+  depguard:
+    rules:
+      crd-types-boundary:
+        list-mode: lax
+        files:
+          - "**/ray-operator/apis/ray/**"
+        deny:
+          - pkg: "github.com/ray-project/kuberay/ray-operator/controllers"
+            desc: "CRD types (apis/ray/) must not import controllers/ — types must remain dependency-free"
+          - pkg: "github.com/ray-project/kuberay/ray-operator/pkg/webhooks"
+            desc: "CRD types (apis/ray/) must not import pkg/webhooks/"
   gofmt:
     simplify: true
   gosec:
@@ -64,6 +75,7 @@ linters-settings:
 linters:
   enable:
     - asciicheck
+    - depguard
     - errcheck
     - errorlint
     - gci

@@ -123,7 +123,7 @@ Enforced via `.pre-commit-config.yaml`:
 - **Status updates**: Use status subresource, update status separately
 - **Finalizers**: Required for cleanup logic
 - **RBAC**: Defined in `config/rbac/`
-- **Webhooks**: Validation and defaulting in `ray-operator/controllers/ray/common/`
+- **Webhooks**: Validation and defaulting in `ray-operator/pkg/webhooks/v1/`
 
 ### Project Modules
 
@@ -135,6 +135,41 @@ This is a multi-module repo with three main Go modules:
 - `scripts/` (utility scripts)
 
 When making changes, run `go mod tidy` in the relevant module directory.
+
+## Generated Files — Do Not Edit
+
+These files are auto-generated. Never edit them directly; modify the source and regenerate.
+
+| Pattern | Generator | Regenerate with |
+| --- | --- | --- |
+| `ray-operator/apis/**/zz_generated.deepcopy.go` | controller-gen | `make generate` |
+| `ray-operator/pkg/client/**` | k8s code-generator | `make generate` |
+| `ray-operator/config/crd/bases/*.yaml` | controller-gen | `make manifests` |
+| `helm-chart/kuberay-operator/crds/*.yaml` | copied from config/crd | `make helm` |
+| `proto/go_client/**` | protoc-gen-go | `make generate` (in proto/) |
+| `proto/swagger/*.json` | protoc-gen-swagger | `make generate` (in proto/) |
+| `docs/reference/api.md` | crd-ref-docs | `make api-docs` |
+| `apiserver/pkg/swagger/datafile.go` | go-bindata | `make build-swagger` |
+| `*_mock.go` | MockGen | `go generate` |
+
+### CRD Source of Truth
+
+The Go types in `ray-operator/apis/ray/v1/*_types.go` are the single source of truth for all CRDs.
+
+```text
+apis/ray/v1/*_types.go  --(make manifests)--> config/crd/bases/*.yaml
+                        --(make generate)---> pkg/client/**
+                        --(make helm)-------> helm-chart/kuberay-operator/crds/
+                        --(make api-docs)---> docs/reference/api.md
+```
+
+After changing `*_types.go`, run `make sync` to regenerate all derived artifacts.
+CI runs `.github/workflows/consistency-check.yaml` to verify generated files match their sources.
+
+## Context File Maintenance
+
+Context files (`.cursor/rules/`, `.claude/rules/`, `CLAUDE.md`) are living documents.
+See the "Maintaining AI Context" section in CONTRIBUTING.md for the update process.
 
 ## Documentation
 
