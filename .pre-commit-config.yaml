@@ -47,6 +47,16 @@ repos:
         pass_filenames: false
         additional_dependencies:
           - github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+      - id: govulncheck
+        name: govulncheck
+        entry: ./scripts/govulncheck.sh
+        types: [go]
+        language: golang
+        require_serial: true
+        always_run: true
+        pass_filenames: false
+        additional_dependencies:
+          - golang.org/x/vuln/cmd/govulncheck@latest
       - id: generate-crd-schema
         name: generate CRD schemas for use of kubeconform
         entry: ./scripts/generate-crd-schema.sh

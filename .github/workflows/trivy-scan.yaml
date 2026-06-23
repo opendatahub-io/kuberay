@@ -1,0 +1,117 @@
+name: Trivy Container Scan
+
+on:
+  push:
+    branches:
+      - dev
+      - release-*
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  schedule:
+    - cron: '15 6 * * 3'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan-operator:
+    name: Scan Operator Image
+    runs-on: ubuntu-22.04
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.draft == false
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Operator image
+        run: |
+          docker build -t kuberay/operator:scan \
+            -f ray-operator/Dockerfile \
+            ray-operator/
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@v0.28.0
+        with:
+          image-ref: 'kuberay/operator:scan'
+          format: 'sarif'
+          output: 'operator-trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'operator-trivy-results.sarif'
+          category: 'trivy-operator'
+
+  scan-apiserver:
+    name: Scan APIServer Image
+    runs-on: ubuntu-22.04
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.draft == false
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build APIServer image
+        run: |
+          docker build -t kuberay/apiserver:scan \
+            -f apiserver/Dockerfile .
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@v0.28.0
+        with:
+          image-ref: 'kuberay/apiserver:scan'
+          format: 'sarif'
+          output: 'apiserver-trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'apiserver-trivy-results.sarif'
+          category: 'trivy-apiserver'
+
+  scan-dashboard:
+    name: Scan Dashboard Image
+    runs-on: ubuntu-22.04
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.draft == false
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Dashboard image
+        run: |
+          docker build -t kuberay/dashboard:scan \
+            -f dashboard/Dockerfile \
+            dashboard/
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@v0.28.0
+        with:
+          image-ref: 'kuberay/dashboard:scan'
+          format: 'sarif'
+          output: 'dashboard-trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'dashboard-trivy-results.sarif'
+          category: 'trivy-dashboard'
