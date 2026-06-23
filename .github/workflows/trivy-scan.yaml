@@ -35,7 +35,7 @@ jobs:
             ray-operator/
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: 'kuberay/operator:scan'
           format: 'sarif'
@@ -68,7 +68,7 @@ jobs:
             -f apiserver/Dockerfile .
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: 'kuberay/apiserver:scan'
           format: 'sarif'
@@ -102,7 +102,7 @@ jobs:
             dashboard/
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: 'kuberay/dashboard:scan'
           format: 'sarif'
