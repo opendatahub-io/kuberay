@@ -11,8 +11,10 @@ Built with Kubebuilder v3 and controller-runtime.
 ## Key Abstractions
 
 - **Reconcilers** (`controllers/ray/*_controller.go`): one per CR kind, implement the controller-runtime `Reconcile` loop
-- **Common builders** (`controllers/ray/common/`): construct K8s objects (Pods, Services, Jobs, RBAC) from CR specs — shared across controllers
-- **Batch scheduler interface** (`controllers/ray/batchscheduler/interface/`): pluggable gang schedulers (Volcano, YuniKorn, Kai, scheduler-plugins)
+- **Common builders** (`controllers/ray/common/`): construct K8s objects
+  (Pods, Services, Jobs, RBAC) from CR specs — shared across controllers
+- **Batch scheduler interface** (`controllers/ray/batchscheduler/interface/`):
+  pluggable gang schedulers (Volcano, YuniKorn, Kai, scheduler-plugins)
 - **Webhooks** (`pkg/webhooks/v1/`): admission validation and defaulting, registered when `ENABLE_WEBHOOKS=true`
 - **Feature gates** (`pkg/features/`): runtime toggles for experimental features (RayCronJob, RayJobDeletionPolicy, etc.)
 

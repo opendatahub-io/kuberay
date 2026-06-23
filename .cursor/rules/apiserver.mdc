@@ -10,7 +10,7 @@ Optional REST/gRPC API server for managing Ray resources. Alpha quality.
 
 ## Architecture
 
-```
+```text
 cmd/main.go        — boots gRPC + HTTP gateway, wires all components
 pkg/server/        — gRPC service implementations (one per resource kind)
 pkg/manager/       — business logic layer, CRUD orchestration against Ray CRDs

@@ -17,7 +17,10 @@ Helm charts for deploying KubeRay components. Three charts, all versioned togeth
 
 ## Do Not Edit Directly
 
-- **CRDs** (`kuberay-operator/crds/*.yaml`): synced from `ray-operator/config/crd/bases/` via `make helm` in `ray-operator/`. Edit the Go types in `ray-operator/apis/ray/v1/*_types.go` and regenerate instead.
+- **CRDs** (`kuberay-operator/crds/*.yaml`): synced from
+  `ray-operator/config/crd/bases/` via `make helm` in `ray-operator/`.
+  Edit the Go types in `ray-operator/apis/ray/v1/*_types.go` and
+  regenerate instead.
 - **README.md** files: generated from `README.md.gotmpl` by helm-docs. Edit the `.gotmpl` source file, not the rendered README.
 
 ## Testing and Validation
