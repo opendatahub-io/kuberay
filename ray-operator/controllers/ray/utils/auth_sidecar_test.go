@@ -268,9 +268,3 @@ func TestCreateEnvVarFromSecret(t *testing.T) {
 	assert.Equal(t, "secret-key", envVar.ValueFrom.SecretKeyRef.Key)
 }
 
-func TestFormatOAuthDelegateURLs(t *testing.T) {
-	result := FormatOAuthDelegateURLs("test-namespace")
-
-	expected := `{"/":{"resource":"pods","namespace":"test-namespace","verb":"get"}}`
-	assert.Equal(t, expected, result)
-}

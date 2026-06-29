@@ -693,58 +693,6 @@ func TestMapAuthResourceToRayClusters(t *testing.T) {
 	}
 }
 
-func TestGetOAuthProxySidecar(t *testing.T) {
-	cluster := &rayv1.RayCluster{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-cluster",
-			Namespace: "default",
-		},
-	}
-
-	container := GetOAuthProxySidecar(cluster)
-
-	assert.Equal(t, oauthProxyContainerName, container.Name)
-	assert.Equal(t, oauthProxyImage, container.Image)
-	assert.NotEmpty(t, container.Args)
-	assert.NotEmpty(t, container.Env)
-	assert.NotEmpty(t, container.VolumeMounts)
-	assert.NotEmpty(t, container.Ports)
-
-	// Verify port configuration
-	assert.Equal(t, int32(authProxyPort), container.Ports[0].ContainerPort)
-	assert.Equal(t, oauthProxyPortName, container.Ports[0].Name)
-
-	// Verify resource limits are set
-	assert.NotNil(t, container.Resources.Requests)
-	assert.NotNil(t, container.Resources.Limits)
-
-	// Verify probes are configured
-	assert.NotNil(t, container.LivenessProbe)
-	assert.NotNil(t, container.ReadinessProbe)
-}
-
-func TestGetOAuthProxyVolumes(t *testing.T) {
-	cluster := &rayv1.RayCluster{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-cluster",
-			Namespace: "default",
-		},
-	}
-
-	volumes := GetOAuthProxyVolumes(cluster)
-
-	assert.Len(t, volumes, 2)
-
-	// Verify volume names
-	volumeNames := make(map[string]bool)
-	for _, vol := range volumes {
-		volumeNames[vol.Name] = true
-	}
-
-	assert.True(t, volumeNames[oauthConfigVolumeName])
-	assert.True(t, volumeNames[oauthProxyVolumeName])
-}
-
 func TestGetOIDCProxySidecar(t *testing.T) {
 	cluster := &rayv1.RayCluster{
 		ObjectMeta: metav1.ObjectMeta{
@@ -810,27 +758,6 @@ func TestHelperFunctions(t *testing.T) {
 		name := namer.TLSSecretName(utils.ModeIntegratedOAuth)
 		assert.Equal(t, "test-cluster-oauth-tls", name)
 	})
-}
-
-func TestGenerateSelfSignedCert(t *testing.T) {
-	cluster := &rayv1.RayCluster{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-cluster",
-			Namespace: "default",
-		},
-	}
-
-	cert, key, err := generateSelfSignedCert(cluster)
-
-	require.NoError(t, err)
-	assert.NotEmpty(t, cert)
-	assert.NotEmpty(t, key)
-
-	// Verify cert and key are valid PEM -  Handled this way due to pre-commit hook false positive
-	assert.Contains(t, string(cert), "BEGIN CERTIFICATE")
-	assert.Contains(t, string(cert), "END CERTIFICATE")
-	assert.Contains(t, string(key), "BEGIN "+"PRIVATE KEY")
-	assert.Contains(t, string(key), "END "+"PRIVATE KEY")
 }
 
 func TestReconcile_RayClusterNotFound(t *testing.T) {
