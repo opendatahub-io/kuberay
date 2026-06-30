@@ -284,16 +284,17 @@ env_vars:
 			WithSpec(rayv1ac.RayJobSpec().
 				WithRayClusterSpec(NewRayClusterSpec()).
 				WithEntrypoint("python -c \"import time; time.sleep(60)\"").
-				WithShutdownAfterJobFinishes(true))
+				WithShutdownAfterJobFinishes(true).
+				WithSubmitterPodTemplate(JobSubmitterPodTemplateApplyConfiguration()))
 
 		rayJob, err := test.Client().Ray().RayV1().RayJobs(namespace.Name).Apply(test.Ctx(), rayJobAC, TestApplyOptions)
 		g.Expect(err).NotTo(HaveOccurred())
 		LogWithTimestamp(test.T(), "Created RayJob %s/%s successfully", rayJob.Namespace, rayJob.Name)
 
-		// Wait until the RayJob's job status transitions to Running
+		// Wait until the RayJob deployment status transitions to Running
 		LogWithTimestamp(test.T(), "Waiting for RayJob %s/%s to be 'Running'", rayJob.Namespace, rayJob.Name)
 		g.Eventually(RayJob(test, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
-			Should(WithTransform(RayJobStatus, Equal(rayv1.JobStatusRunning)))
+			Should(WithTransform(RayJobDeploymentStatus, Equal(rayv1.JobDeploymentStatusRunning)))
 
 		// Fetch RayCluster and delete the head Pod
 		rayJob, err = GetRayJob(test, rayJob.Namespace, rayJob.Name)
@@ -312,14 +313,24 @@ env_vars:
 		g.Eventually(func() (*corev1.Pod, error) {
 			return GetHeadPod(test, rayCluster)
 		}, TestTimeoutMedium, 2*time.Second).ShouldNot(BeNil())
+
+		// After head pod deletion, the RayJob should reach a terminal state. If head recreation
+		// succeeds and the Ray job keeps running, the job may complete successfully.
 		g.Eventually(RayJob(test, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
-			Should(WithTransform(RayJobDeploymentStatus, Equal(rayv1.JobDeploymentStatusFailed)))
-		g.Eventually(RayJob(test, rayJob.Namespace, rayJob.Name), TestTimeoutMedium).
-			Should(WithTransform(RayJobReason, Or(
+			Should(WithTransform(RayJobDeploymentStatus, Or(
+				Equal(rayv1.JobDeploymentStatusFailed),
+				Equal(rayv1.JobDeploymentStatusComplete),
+			)))
+
+		rayJob, err = GetRayJob(test, rayJob.Namespace, rayJob.Name)
+		g.Expect(err).NotTo(HaveOccurred())
+		if rayJob.Status.JobDeploymentStatus == rayv1.JobDeploymentStatusFailed {
+			g.Expect(rayJob.Status.Reason).To(Or(
 				Equal(rayv1.AppFailed),
 				Equal(rayv1.JobDeploymentStatusTransitionGracePeriodExceeded),
 				Equal(rayv1.SubmissionFailed),
-			)))
+			))
+		}
 		// Cleanup
 		err = test.Client().Ray().RayV1().RayJobs(namespace.Name).Delete(test.Ctx(), rayJob.Name, metav1.DeleteOptions{})
 		g.Expect(err).NotTo(HaveOccurred())

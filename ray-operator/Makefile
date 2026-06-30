@@ -104,6 +104,12 @@ test-e2e-rayjob: WHAT ?= ./test/e2erayjob
 test-e2e-rayjob: manifests fmt vet ## Run e2e RayJob tests.
 	go test -timeout 30m -v $(WHAT)
 
+test-e2e-rayjob-pr: ## Build, deploy, and run PR-subset RayJob e2e tests on Kind (sequential, 2-CPU friendly).
+	$(CURDIR)/../scripts/run-e2e-rayjob-kind.sh
+
+test-e2e-rayjob-pr-run: ## Run PR-subset RayJob e2e tests only (Kind cluster and operator must already exist).
+	SKIP_DEPLOY=1 $(CURDIR)/../scripts/run-e2e-rayjob-kind.sh $(if $(TEST),--test $(TEST),)
+
 sync: helm api-docs
 	./hack/update-codegen.sh
 

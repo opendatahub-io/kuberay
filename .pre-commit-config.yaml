@@ -4,6 +4,7 @@ exclude: _generated.go$|\.svg$|^third_party/|^proto/swagger/|^apiserver/pkg/swag
 
 default_language_version:
   golang: 1.25.0
+  python: python3.13
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -33,7 +34,7 @@ repos:
         exclude: ^dashboard/\.yarn/|^ray-operator/test/support/redis\.go$
 
   - repo: https://github.com/shellcheck-py/shellcheck-py
-    rev: v0.10.0.1
+    rev: v0.11.0.1
     hooks:
       - id: shellcheck
 
