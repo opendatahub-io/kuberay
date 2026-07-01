@@ -24,3 +24,4 @@ spec:
         secret:
           defaultMode: 420
           secretName: kuberay-webhook-server-cert
+          optional: true
