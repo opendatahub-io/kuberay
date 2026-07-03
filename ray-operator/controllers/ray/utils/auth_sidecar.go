@@ -223,4 +223,3 @@ func CreateEnvVarFromSecret(envName, secretName, secretKey string) corev1.EnvVar
 		},
 	}
 }
-

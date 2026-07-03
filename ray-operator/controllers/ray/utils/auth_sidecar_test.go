@@ -267,4 +267,3 @@ func TestCreateEnvVarFromSecret(t *testing.T) {
 	assert.Equal(t, "secret-name", envVar.ValueFrom.SecretKeyRef.Name)
 	assert.Equal(t, "secret-key", envVar.ValueFrom.SecretKeyRef.Key)
 }
-
