@@ -19,7 +19,7 @@ build-test-image:
 	@scripts/update-resources -scenario build-image ray-operator/test/e2e/rayjob_lightweight_test.go
 	@echo "Resource requirements updated successfully using Go AST."
 	# Build the Docker image using podman
-	podman build -f ray-operator/images/tests/Dockerfile -t $(E2E_TEST_IMAGE) .
+	podman build --platform linux/amd64 -f ray-operator/images/tests/Dockerfile -t $(E2E_TEST_IMAGE) .
 	# Confirm that the resources/ limits were updated
 	@echo "=== Contents of support.go (resource values) ==="
 	@grep -n 'resource\.MustParse(' ray-operator/test/e2e/support.go | grep -E '"(500m|1000m|2000m|1G|3G|6G|10G)"'

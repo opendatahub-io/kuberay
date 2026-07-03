@@ -55,6 +55,9 @@ if [[ -z "$TEST_TAGS" ]]; then
 fi
 
 REGEX_PARTS=()
+INCLUDE_TIER1=false
+TEST_PACKAGES=("./test/e2e")
+TEST_TIMEOUT="30m"
 
 IFS=',' read -ra TIER_LIST <<< "$TEST_TAGS"
 for TIER in "${TIER_LIST[@]}"; do
@@ -64,8 +67,9 @@ for TIER in "${TIER_LIST[@]}"; do
     [[ -z "$TIER" ]] && continue
     case "$TIER" in
         Tier1)
-            echo "Adding Tier1 kuberay e2e tests"
-            REGEX_PARTS+=("TestRayJobWithClusterSelector|TestRayJob|TestRayJobSuspend|TestRayJobLightWeightMode")
+            echo "Adding Tier1 kuberay e2e tests (including autoscaler)"
+            INCLUDE_TIER1=true
+            REGEX_PARTS+=("TestRayJobWithClusterSelector|TestRayJob|TestRayJobSuspend|TestRayJobLightWeightMode|TestRayClusterAutoscaler")
             ;;
         Smoke)
             echo "Adding Smoke kuberay e2e tests (authentication validation)"
@@ -89,8 +93,15 @@ if [[ ${#REGEX_PARTS[@]} -eq 0 ]]; then
     show_usage
 fi
 
+if [[ "$INCLUDE_TIER1" == true ]]; then
+    TEST_PACKAGES+=("./test/e2eautoscaler")
+    TEST_TIMEOUT="60m"
+fi
+
 TEST_RUN_REGEX="^($(IFS='|'; echo "${REGEX_PARTS[*]}"))$"
 echo "Running e2e tests matching: $TEST_RUN_REGEX"
+echo "Running packages: ${TEST_PACKAGES[*]}"
+echo "Test timeout: $TEST_TIMEOUT"
 
 # Run tests with junit XML output
-gotestsum --format standard-verbose --junitfile results/xunit_report.xml --junitfile-testsuite-name short --junitfile-testcase-classname relative -- -timeout 30m -run "$TEST_RUN_REGEX" ./test/e2e -p 1 -parallel 1 "${EXTRA_ARGS[@]}"
+gotestsum --format standard-verbose --junitfile results/xunit_report.xml --junitfile-testsuite-name short --junitfile-testcase-classname relative -- -timeout "$TEST_TIMEOUT" -run "$TEST_RUN_REGEX" "${TEST_PACKAGES[@]}" -p 1 -parallel 1 "${EXTRA_ARGS[@]}"

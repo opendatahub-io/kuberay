@@ -1373,31 +1373,42 @@ func (r *RayClusterReconciler) configureMTLSForPod(podTemplate *corev1.PodTempla
 		r.addCertVolumeMounts(&podTemplate.Spec.InitContainers[i])
 	}
 
-	// For head pods, prepend an init container that waits until the TLS certificate
-	// issued by cert-manager includes the pod's actual IP as an IP SAN. Without this,
-	// there is a race condition: cert-manager issues the initial certificate before the
-	// pod IP is known (so only the FQDN DNS SAN is present), and GCS loads this
-	// incomplete certificate at startup. Python clients that connect via the pod IP
-	// (after resolving the FQDN) then fail TLS verification because no IP SAN matches.
-	// Blocking GCS startup until the cert carries the pod's IP SAN eliminates the race.
-	if !isWorker && len(podTemplate.Spec.Containers) > 0 {
-		waitScript := `POD_IP="${MY_POD_IP}"
-CERT="/home/ray/workspace/tls/tls.crt"
-echo "Waiting for TLS cert to include IP SAN for ${POD_IP}..."
+	// Prepend an init container on both head and worker pods that waits until the
+	// TLS certificate issued by cert-manager includes the pod's actual IP as an IP SAN.
+	// Without this, there is a race condition: cert-manager issues the initial certificate
+	// before the pod IP is known, so the raylet starts and immediately tries to register
+	// with GCS using the pod IP — which is not yet in the cert — causing TLS handshake
+	// failures ("No match found for server name: <pod_ip>"). This affects workers on every
+	// autoscaling scale-out event, not only the initial cluster startup.
+	// The init container must run before wait-gcs-ready since that also makes a mTLS connection.
+	if len(podTemplate.Spec.Containers) > 0 {
+		certPath := "/home/ray/workspace/tls/tls.crt"
+		waitScript := fmt.Sprintf(`CERT="%s"
+DEADLINE=$(( $(date +%%s) + 300 ))
+echo "Waiting for TLS cert to include IP SAN for ${POD_IP} (timeout 300s)..."
 while true; do
-  if openssl x509 -in "${CERT}" -noout -text 2>/dev/null | grep -q "IP Address:${POD_IP}"; then
+  if [ -z "${POD_IP}" ]; then
+    echo "Pod IP not yet assigned, retrying in 5s..."
+    sleep 5
+    continue
+  fi
+  if openssl x509 -in "${CERT}" -noout -text 2>/dev/null | grep -qE "IP Address:${POD_IP}([^0-9.]|$)"; then
     echo "TLS cert now includes IP SAN for ${POD_IP}"
     exit 0
   fi
+  if [ "$(date +%%s)" -ge "${DEADLINE}" ]; then
+    echo "Timed out waiting for IP SAN ${POD_IP} in TLS cert; cert-manager may not have reissued the certificate" >&2
+    exit 1
+  fi
   echo "IP SAN for ${POD_IP} not yet in cert, retrying in 5s..."
   sleep 5
-done`
+done`, certPath)
 		waitInitContainer := corev1.Container{
 			Name:  "wait-for-tls-ip-san",
 			Image: podTemplate.Spec.Containers[0].Image,
 			Env: []corev1.EnvVar{
 				{
-					Name: "MY_POD_IP",
+					Name: "POD_IP",
 					ValueFrom: &corev1.EnvVarSource{
 						FieldRef: &corev1.ObjectFieldSelector{
 							FieldPath: "status.podIP",

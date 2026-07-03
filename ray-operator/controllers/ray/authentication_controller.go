@@ -55,8 +55,9 @@ const (
 
 // oidcProxyContainerImage holds the resolved kube-rbac-proxy image. Populated by
 // init() from the operator's env vars so that disconnected installs can override
-// the image via RELATED_IMAGE_ODH_KUBE_AUTH_PROXY_IMAGE (set in manager.yaml and
-// substituted by the deployer from the RHOAI CSV relatedImages at install time).
+// the image via RELATED_IMAGE_ODH_KUBE_AUTH_PROXY_IMAGE or
+// RELATED_IMAGE_OSE_KUBE_RBAC_PROXY_IMAGE (injected on OpenShift via the openshift
+// overlay and substituted by the ODH/RHOAI operator from CSV relatedImages).
 var oidcProxyContainerImage = defaultOIDCProxyContainerImage
 
 var errAutoscalerRoleBindingPending = errors.New("autoscaler RoleBinding not found yet")
