@@ -1,0 +1,341 @@
+{
+  "component": "kuberay",
+  "repo": "ray-project/kuberay",
+  "commit_sha": "27d8d298c5a330c4a5da57e7f8ae50dac3b2acfa",
+  "extracted_at": "2026-07-03T16:01:43Z",
+  "analyzer_version": "0.1.1",
+  "schema_version": "2",
+  "dockerfiles": [
+    {
+      "path": "apiserver/Dockerfile",
+      "base_image": "scratch",
+      "build_stage_images": [
+        "golang:1.24.0-bullseye"
+      ],
+      "stages": 2,
+      "user": "65532:65532",
+      "issues": [
+        "Unpinned base image: scratch"
+      ],
+      "copy_instructions": [
+        {
+          "sources": [
+            "/workspace/apiserver/kuberay-apiserver"
+          ],
+          "destination": "apiserver/",
+          "from_stage": "builder",
+          "original_sources": [
+            "go.mod",
+            "go.sum",
+            "ray-operator/go.mod",
+            "ray-operator/go.sum",
+            "proto/",
+            "ray-operator/",
+            "apiserver/",
+            "apiserversdk/"
+          ]
+        },
+        {
+          "sources": [
+            "proto/"
+          ],
+          "destination": "proto/"
+        }
+      ],
+      "build_commands": [
+        {
+          "tool": "go",
+          "command": "build",
+          "entry_point": "cmd/main.go",
+          "output": "kuberay-apiserver"
+        }
+      ]
+    },
+    {
+      "path": "benchmark/perf-tests/images/ray-pytorch/Dockerfile",
+      "base_image": "rayproject/ray:2.46.0",
+      "stages": 1,
+      "issues": [
+        "No USER directive found (defaults to root)"
+      ],
+      "build_commands": [
+        {
+          "tool": "pip",
+          "command": "install"
+        }
+      ]
+    },
+    {
+      "path": "dashboard/Dockerfile",
+      "base_image": "base",
+      "build_stage_images": [
+        "node:18-alpine",
+        "base",
+        "base"
+      ],
+      "stages": 4,
+      "user": "nextjs",
+      "exposed_ports": [
+        3000
+      ],
+      "issues": [
+        "Unpinned base image: base",
+        "Unpinned base image: base",
+        "Unpinned base image: base"
+      ],
+      "copy_instructions": [
+        {
+          "sources": [
+            "/app/public"
+          ],
+          "destination": "./public",
+          "from_stage": "builder",
+          "original_sources": [
+            "."
+          ]
+        },
+        {
+          "sources": [
+            "/app/.next/standalone"
+          ],
+          "destination": "./",
+          "from_stage": "builder",
+          "original_sources": [
+            "."
+          ]
+        },
+        {
+          "sources": [
+            "/app/.next/static"
+          ],
+          "destination": "./.next/static",
+          "from_stage": "builder",
+          "original_sources": [
+            "."
+          ]
+        }
+      ],
+      "build_commands": [
+        {
+          "tool": "yarn",
+          "command": "build;"
+        },
+        {
+          "tool": "pnpm",
+          "command": "build;"
+        }
+      ]
+    },
+    {
+      "path": "experimental/Dockerfile",
+      "base_image": "scratch",
+      "build_stage_images": [
+        "golang:1.24.0-bullseye"
+      ],
+      "stages": 2,
+      "issues": [
+        "Unpinned base image: scratch",
+        "No USER directive found (defaults to root)"
+      ],
+      "copy_instructions": [
+        {
+          "sources": [
+            "/workspace/experimental/security_proxy"
+          ],
+          "destination": "/usr/local/bin/security_proxy",
+          "from_stage": "builder",
+          "original_sources": [
+            "go.mod",
+            "go.sum",
+            "ray-operator/go.mod",
+            "ray-operator/go.sum",
+            "experimental/"
+          ]
+        }
+      ],
+      "build_commands": [
+        {
+          "tool": "go",
+          "command": "build",
+          "entry_point": "cmd/main.go",
+          "output": "security_proxy"
+        }
+      ]
+    },
+    {
+      "path": "proto/Dockerfile",
+      "base_image": "golang:1.24.0-bullseye",
+      "stages": 1,
+      "user": "65532:65532"
+    },
+    {
+      "path": "ray-operator/Dockerfile",
+      "base_image": "gcr.io/distroless/base-debian12:nonroot",
+      "build_stage_images": [
+        "golang:1.24.0-bullseye"
+      ],
+      "stages": 2,
+      "user": "65532:65532",
+      "copy_instructions": [
+        {
+          "sources": [
+            "/workspace/manager"
+          ],
+          "destination": ".",
+          "from_stage": "builder",
+          "original_sources": [
+            "go.mod",
+            "go.sum",
+            "main.go",
+            "apis/",
+            "controllers/",
+            "pkg/features",
+            "pkg/utils",
+            "pkg/webhooks"
+          ]
+        }
+      ],
+      "build_commands": [
+        {
+          "tool": "go",
+          "command": "build",
+          "entry_point": "main.go",
+          "output": "manager"
+        }
+      ]
+    },
+    {
+      "path": "ray-operator/Dockerfile.buildx",
+      "base_image": "gcr.io/distroless/base-debian12:nonroot",
+      "stages": 1,
+      "user": "65532:65532",
+      "architectures": [
+        "multi-arch"
+      ],
+      "build_args": {
+        "TARGETARCH": ""
+      },
+      "copy_instructions": [
+        {
+          "sources": [
+            "./manager-${TARGETARCH}"
+          ],
+          "destination": "./manager"
+        }
+      ]
+    },
+    {
+      "path": "ray-operator/Dockerfile.konflux",
+      "base_image": "registry.access.redhat.com/ubi9/ubi-minimal@sha256:7c5495d5fad59aaee12abc3cbbd2b283818ee1e814b00dbc7f25bf2d14fa4f0c",
+      "build_stage_images": [
+        "registry.access.redhat.com/ubi9/go-toolset@sha256:84286c7555df503df0bd3acb86fe2ad50af82a07f35707918bb0fad312fdc193"
+      ],
+      "stages": 2,
+      "user": "65532:65532",
+      "architectures": [
+        "multi-arch"
+      ],
+      "build_args": {
+        "TARGETARCH": "",
+        "TARGETOS": ""
+      },
+      "copy_instructions": [
+        {
+          "sources": [
+            "/workspace/manager"
+          ],
+          "destination": ".",
+          "from_stage": "builder",
+          "original_sources": [
+            "go.mod",
+            "go.sum",
+            "main.go",
+            "apis/",
+            "controllers/",
+            "pkg/features",
+            "pkg/utils",
+            "pkg/webhooks"
+          ]
+        }
+      ],
+      "build_commands": [
+        {
+          "tool": "go",
+          "command": "build",
+          "entry_point": "main.go",
+          "output": "manager"
+        }
+      ]
+    },
+    {
+      "path": "ray-operator/Dockerfile.rhoai",
+      "base_image": "registry.access.redhat.com/ubi9/ubi:latest",
+      "build_stage_images": [
+        "registry.redhat.io/ubi9/go-toolset@sha256:570ebf7fd7809394f10deaa27bc5b80e31891c17f10e95fe6b587e4eea7be790"
+      ],
+      "stages": 2,
+      "user": "65532:65532",
+      "issues": [
+        "Unpinned base image: registry.access.redhat.com/ubi9/ubi:latest"
+      ],
+      "copy_instructions": [
+        {
+          "sources": [
+            "/workspace/manager"
+          ],
+          "destination": ".",
+          "from_stage": "builder",
+          "original_sources": [
+            "go.mod",
+            "go.sum",
+            "main.go",
+            "apis/",
+            "controllers/",
+            "pkg/features",
+            "pkg/utils",
+            "pkg/webhooks"
+          ]
+        }
+      ],
+      "build_commands": [
+        {
+          "tool": "go",
+          "command": "build",
+          "entry_point": "main.go",
+          "output": "manager"
+        }
+      ]
+    }
+  ],
+  "data_coverage": {
+    "api_types": "none",
+    "component_refs": "none",
+    "configmap_volumes": "none",
+    "configmaps": "none",
+    "crds": "none",
+    "deployments": "none",
+    "dockerfiles": "rich",
+    "external_connections": "none",
+    "ingress_routing": "none",
+    "kustomize_overlay_refs": "none",
+    "label_contracts": "none",
+    "network_policies": "none",
+    "operator_config": "none",
+    "platform_detection": "none",
+    "prometheus_metrics": "none",
+    "python_k8s_calls": "none",
+    "rbac": "none",
+    "reconcile_sequences": "none",
+    "runtime_dependencies": "none",
+    "secrets": "none",
+    "services": "none",
+    "serving_runtime_refs": "none",
+    "status_conditions": "none",
+    "webhooks": "none"
+  },
+  "summary": "kuberay is a Kubernetes component. Dockerfile EXPOSE ports: 3000.",
+  "extractors_run": [
+    "docker",
+    "kustomize"
+  ]
+}
