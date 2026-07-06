@@ -1,0 +1,85 @@
+name: E2E Tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches:
+      - '**'
+  push:
+    branches:
+      - dev
+      - 'release-*'
+
+concurrency:
+  group: ${{ github.head_ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false) }}
+    steps:
+        - name: Checkout code
+          uses: actions/checkout@v3
+          with:
+            submodules: recursive
+
+        - name: Set up Go
+          uses: actions/setup-go@v3
+          with:
+            go-version: v1.22
+
+        - name: Set up gotestfmt
+          uses: gotesttools/gotestfmt-action@v2
+          with:
+            token: ${{ secrets.GITHUB_TOKEN }}
+
+        - name: Setup and start KinD cluster
+          uses: ./.github/workflows/actions/kind
+
+        - name: Deploy Kuberay operator
+          id: deploy
+          run: |
+            echo "Deploying Kuberay operator"
+            cd ray-operator
+
+            IMG=quay.io/opendatahub/kuberay-operator:dev
+            make docker-build -e IMG="${IMG}" -e ENGINE=docker
+            kind load docker-image ${IMG}
+
+            make deploy -e IMG="${IMG}"
+            kubectl wait --timeout=90s --for=condition=Available=true deployment -n default kuberay-operator
+
+        - name: Update resource requirements for e2e tests
+          if: steps.deploy.outcome == 'success'
+          run: |
+            echo "Updating resource requirements using Go AST manipulation..."
+            cd scripts
+            go build -o update-resources update-resources.go
+            ./update-resources -scenario pr ../ray-operator/test/e2e/support.go
+            echo "Resource requirements updated successfully for e2e tests."
+
+        - name: Run e2e tests
+          if: steps.deploy.outcome == 'success'
+          run: |
+            export KUBERAY_TEST_TIMEOUT_SHORT=5m KUBERAY_TEST_TIMEOUT_MEDIUM=12m KUBERAY_TEST_TIMEOUT_LONG=15m KUBERAY_TEST_RAY_IMAGE=rayproject/ray:2.52.1
+
+            set -euo pipefail
+            cd ray-operator
+            # only test the subset of tests - the rest will be tested post-merge
+            go test -timeout 120m -p 1 -parallel 1 -v -run '^(TestRayJobWithClusterSelector|TestRayJob|TestRayJobSuspend|TestRayJobLightWeightMode)$' ./test/e2e -json 2>&1 | tee ./gotest.log | gotestfmt
+
+        - name: Print KubeRay operator logs
+          if: steps.deploy.outcome == 'success'
+          run: |
+            echo "Printing KubeRay operator logs"
+            kubectl logs -n default --tail -1 -l app.kubernetes.io/name=kuberay-operator app.kubernetes.io/name=kuberay | tee ./kuberay-operator.log
+
+        - name: Upload logs
+          if: failure()
+          uses: actions/upload-artifact@v4
+          with:
+            name: logs
+            retention-days: 10
+            path: |
+              **/*.log

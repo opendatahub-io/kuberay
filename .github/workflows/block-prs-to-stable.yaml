@@ -1,0 +1,71 @@
+name: Block PRs to stable
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - edited          # catches "change base branch"
+      - synchronize     # catches updates/pushes to PR branch
+      - ready_for_review
+      - converted_to_draft
+
+permissions:
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: block-stable-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  close-if-targets-stable:
+    if: ${{ github.event.pull_request.base.ref == 'stable' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Comment + close PR ...
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+
+            const body = [
+              "🚫 **PRs targeting `stable` are not allowed in this repo.**",
+              "",
+              "Please retarget your PR to `dev`.",
+              "The `stable` branch is updated only via fast-forward / release automation from `dev`."
+            ].join("\n");
+
+            // Avoid spamming the same comment repeatedly
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                per_page: 100
+              }
+            );
+
+            const alreadyCommented = comments.some(c =>
+              c.user?.type === "Bot" && c.body?.includes("PRs targeting `stable` are not allowed")
+            );
+
+            if (!alreadyCommented) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body
+              });
+            }
+
+            if (pr.state !== "closed") {
+              await github.rest.pulls.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                state: "closed"
+              });
+            }

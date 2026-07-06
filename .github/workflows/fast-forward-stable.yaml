@@ -1,0 +1,169 @@
+name: Fast-forward stable branch from dev (Bodies of Water)
+
+on:
+  push:
+    branches:
+      - dev
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run in dry-run mode (no actual push)'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  fast-forward:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch all branches
+        run: |
+          git fetch origin dev
+          git fetch origin stable
+
+      - name: Check if dev and stable are the same
+        id: check_changes
+        run: |
+          DEV_SHA=$(git rev-parse origin/dev)
+          STABLE_SHA=$(git rev-parse origin/stable)
+
+          echo "dev_sha=$DEV_SHA" >> $GITHUB_OUTPUT
+          echo "stable_sha=$STABLE_SHA" >> $GITHUB_OUTPUT
+
+          if [ "$DEV_SHA" = "$STABLE_SHA" ]; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "✅ Dev and stable branches are already at the same commit ($DEV_SHA)"
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "📋 Dev is at: $DEV_SHA"
+            echo "📋 Stable is at: $STABLE_SHA"
+          fi
+
+      - name: Check if fast-forward is possible
+        id: check_ff
+        if: steps.check_changes.outputs.has_changes == 'true'
+        run: |
+          # Create and switch to local stable branch tracking remote
+          git checkout -b stable origin/stable
+
+          # Check if we can fast-forward merge dev into stable
+          if git merge-base --is-ancestor origin/stable origin/dev; then
+            echo "can_fast_forward=true" >> $GITHUB_OUTPUT
+            echo "✅ Fast-forward is possible - stable is an ancestor of dev"
+
+            # Show what commits will be added
+            echo "📋 Commits that will be fast-forwarded:"
+            git log --oneline origin/stable..origin/dev
+          else
+            echo "can_fast_forward=false" >> $GITHUB_OUTPUT
+            echo "❌ Fast-forward is not possible - stable has diverged from dev"
+
+            # Show the divergence
+            echo "📋 Commits in stable not in dev:"
+            git log --oneline origin/dev..origin/stable
+            echo "📋 Commits in dev not in stable:"
+            git log --oneline origin/stable..origin/dev
+
+            exit 1
+          fi
+
+      - name: Perform fast-forward merge
+        id: fast_forward
+        if: steps.check_changes.outputs.has_changes == 'true' && steps.check_ff.outputs.can_fast_forward == 'true'
+        run: |
+          # Ensure we're on stable branch
+          git checkout stable
+
+          # Perform the fast-forward merge
+          git merge --ff-only origin/dev
+
+          # Verify the merge was successful
+          NEW_STABLE_SHA=$(git rev-parse stable)
+          DEV_SHA="${{ steps.check_changes.outputs.dev_sha }}"
+
+          if [ "$NEW_STABLE_SHA" = "$DEV_SHA" ]; then
+            echo "merge_successful=true" >> $GITHUB_OUTPUT
+            echo "new_stable_sha=$NEW_STABLE_SHA" >> $GITHUB_OUTPUT
+            echo "✅ Fast-forward merge successful"
+            echo "📋 Stable branch is now at: $NEW_STABLE_SHA"
+          else
+            echo "merge_successful=false" >> $GITHUB_OUTPUT
+            echo "❌ Fast-forward merge failed - SHA mismatch"
+            echo "Expected: $DEV_SHA"
+            echo "Got: $NEW_STABLE_SHA"
+            exit 1
+          fi
+
+      - name: Push changes (dry-run check)
+        if: steps.check_changes.outputs.has_changes == 'true' && steps.fast_forward.outputs.merge_successful == 'true' && inputs.dry_run == true
+        run: |
+          echo "🔍 DRY RUN MODE - Would push the following changes:"
+          echo "📋 Stable branch would be updated to: ${{ steps.fast_forward.outputs.new_stable_sha }}"
+          echo "📋 This matches dev branch SHA: ${{ steps.check_changes.outputs.dev_sha }}"
+          git log --oneline ${{ steps.check_changes.outputs.stable_sha }}..${{ steps.fast_forward.outputs.new_stable_sha }}
+
+      - name: Push changes to stable
+        if: steps.check_changes.outputs.has_changes == 'true' && steps.fast_forward.outputs.merge_successful == 'true' && inputs.dry_run != true
+        run: |
+          git push origin stable
+          echo "✅ Successfully pushed fast-forward changes to stable branch"
+
+      - name: Verify final state
+        if: steps.check_changes.outputs.has_changes == 'true' && steps.fast_forward.outputs.merge_successful == 'true' && inputs.dry_run != true
+        run: |
+          # Fetch the latest state from remote
+          git fetch origin stable
+
+          # Verify remote stable matches what we expect
+          REMOTE_STABLE_SHA=$(git rev-parse origin/stable)
+          EXPECTED_SHA="${{ steps.check_changes.outputs.dev_sha }}"
+
+          if [ "$REMOTE_STABLE_SHA" = "$EXPECTED_SHA" ]; then
+            echo "✅ Verification successful!"
+            echo "📋 Remote stable branch SHA: $REMOTE_STABLE_SHA"
+            echo "📋 Dev branch SHA: $EXPECTED_SHA"
+            echo "📋 Both branches are now synchronized"
+          else
+            echo "❌ Verification failed!"
+            echo "📋 Remote stable SHA: $REMOTE_STABLE_SHA"
+            echo "📋 Expected SHA: $EXPECTED_SHA"
+            exit 1
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Fast-forward Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ steps.check_changes.outputs.has_changes }}" = "false" ]; then
+            echo "✅ **No changes needed** - dev and stable branches are already synchronized" >> $GITHUB_STEP_SUMMARY
+            echo "- Both branches at commit: \`${{ steps.check_changes.outputs.dev_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.check_ff.outputs.can_fast_forward }}" = "false" ]; then
+            echo "❌ **Fast-forward failed** - stable branch has diverged from dev" >> $GITHUB_STEP_SUMMARY
+            echo "- Manual intervention required to resolve branch divergence" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "🔍 **Dry run completed successfully**" >> $GITHUB_STEP_SUMMARY
+            echo "- Fast-forward is possible and would update stable to: \`${{ steps.fast_forward.outputs.new_stable_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.fast_forward.outputs.merge_successful }}" = "true" ]; then
+            echo "✅ **Fast-forward completed successfully**" >> $GITHUB_STEP_SUMMARY
+            echo "- Stable branch updated to: \`${{ steps.fast_forward.outputs.new_stable_sha }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- Both dev and stable branches are now synchronized" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Fast-forward failed**" >> $GITHUB_STEP_SUMMARY
+            echo "- Check the workflow logs for detailed error information" >> $GITHUB_STEP_SUMMARY
+          fi

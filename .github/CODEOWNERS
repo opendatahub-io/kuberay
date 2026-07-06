@@ -1,0 +1,5 @@
+# Global code owners - at least one approval from this group is required for all PRs
+# (when combined with branch protection rules requiring CODEOWNERS review)
+
+# Default owners for everything in the repo
+*       @pawelpaszki @laurafitzgerald @kryanbeane @CathalOConnorRH @chipspeak @szaher
