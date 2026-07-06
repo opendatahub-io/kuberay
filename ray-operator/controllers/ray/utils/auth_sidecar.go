@@ -1,8 +1,6 @@
 package utils
 
 import (
-	"fmt"
-
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -224,9 +222,4 @@ func CreateEnvVarFromSecret(envName, secretName, secretKey string) corev1.EnvVar
 			},
 		},
 	}
-}
-
-// FormatOAuthDelegateURLs formats the OpenShift OAuth delegate URLs
-func FormatOAuthDelegateURLs(namespace string) string {
-	return fmt.Sprintf(`{"/":{"resource":"pods","namespace":"%s","verb":"get"}}`, namespace)
 }
