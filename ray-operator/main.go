@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	certmanagerv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	"github.com/go-logr/zapr"
@@ -30,6 +29,7 @@ import (
 	k8szap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
@@ -247,15 +247,16 @@ func main() {
 	restConfig.Burst = *config.Burst
 
 	// Fetch the cluster TLS security profile for metrics server (OpenShift only).
-	// Uses a short timeout so transient API issues do not block startup indefinitely.
-	bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer bootstrapCancel()
-	tlsResult, err := pkgtls.Resolve(bootstrapCtx, restConfig)
+	// Resolve() has its own 10s timeout internally.
+	tlsResult, err := pkgtls.Resolve(context.Background(), restConfig)
 	if err != nil {
 		setupLog.Error(err, "unable to resolve TLS configuration")
 		os.Exit(1)
 	}
 	options.Metrics.TLSOpts = tlsResult.TLSOpts
+	options.WebhookServer = webhook.NewServer(webhook.Options{
+		TLSOpts: tlsResult.TLSOpts,
+	})
 
 	mgr, err := ctrl.NewManager(restConfig, options)
 	exitOnError(err, "unable to start manager")
