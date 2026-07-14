@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	configv1 "github.com/openshift/api/config/v1"
@@ -83,6 +84,7 @@ func Resolve(ctx context.Context, cfg *rest.Config) (Result, error) {
 			log.Info("APIServer resource not found, using hardened defaults")
 		case apierrors.IsServiceUnavailable(err),
 			apierrors.IsTimeout(err),
+			apierrors.IsServerTimeout(err),
 			apierrors.IsTooManyRequests(err),
 			errors.Is(err, context.DeadlineExceeded):
 			log.Info("Transient API error reading TLS profile, using hardened defaults", "error", err)
@@ -151,6 +153,10 @@ func parseCustomProfile(custom *configv1.CustomTLSProfile) (uint16, []uint16) {
 
 	ciphers := make([]uint16, 0, len(custom.Ciphers))
 	for _, name := range custom.Ciphers {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
 		if id, ok := openSSLToGoCipher[name]; ok {
 			ciphers = append(ciphers, id)
 		} else {

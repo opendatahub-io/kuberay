@@ -93,6 +93,34 @@ func TestParseProfile(t *testing.T) {
 			wantCiphers:    []uint16{},
 		},
 		{
+			name: "Custom with whitespace-padded cipher names still resolves",
+			profile: &configv1.TLSSecurityProfile{
+				Type: configv1.TLSProfileCustomType,
+				Custom: &configv1.CustomTLSProfile{
+					TLSProfileSpec: configv1.TLSProfileSpec{
+						MinTLSVersion: "VersionTLS12",
+						Ciphers:       []string{"  ECDHE-ECDSA-AES128-GCM-SHA256  ", " ECDHE-RSA-AES256-GCM-SHA384"},
+					},
+				},
+			},
+			wantMinVersion: tls.VersionTLS12,
+			wantCiphers:    []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384},
+		},
+		{
+			name: "Custom with whitespace-only cipher entries are skipped",
+			profile: &configv1.TLSSecurityProfile{
+				Type: configv1.TLSProfileCustomType,
+				Custom: &configv1.CustomTLSProfile{
+					TLSProfileSpec: configv1.TLSProfileSpec{
+						MinTLSVersion: "VersionTLS12",
+						Ciphers:       []string{"   ", "ECDHE-ECDSA-AES128-GCM-SHA256", "  "},
+					},
+				},
+			},
+			wantMinVersion: tls.VersionTLS12,
+			wantCiphers:    []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
+		},
+		{
 			name: "Unknown type falls back to Intermediate",
 			profile: &configv1.TLSSecurityProfile{
 				Type: "SuperSecure",
