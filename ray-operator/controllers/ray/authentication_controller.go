@@ -104,6 +104,7 @@ func NewAuthenticationController(mgr manager.Manager, options RayClusterReconcil
 // +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=operator.openshift.io,resources=kubeapiservers,verbs=get;list;watch
 // +kubebuilder:rbac:groups=operator.openshift.io,resources=kubeapiservers/status,verbs=get;list;watch
+// +kubebuilder:rbac:groups=config.openshift.io,resources=apiservers,verbs=get
 // +kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get;list;watch
 // +kubebuilder:rbac:groups=config.openshift.io,resources=authentications/status,verbs=get;list;watch
 // +kubebuilder:rbac:groups=config.openshift.io,resources=oauths,verbs=get;list;watch

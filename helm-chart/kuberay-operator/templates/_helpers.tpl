@@ -268,6 +268,12 @@ rules:
 - apiGroups:
   - config.openshift.io
   resources:
+  - apiservers
+  verbs:
+  - get
+- apiGroups:
+  - config.openshift.io
+  resources:
   - authentications
   - authentications/status
   - oauths
