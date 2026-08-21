@@ -8,6 +8,8 @@ spec:
       containers:
       - name: kuberay-operator
         args:
+        - --feature-gates=RayClusterStatusConditions=true
+        - --watch-namespace=$(namespace)
         - --metrics-cert-path=/etc/metrics-certs
         ports:
         - name: https
