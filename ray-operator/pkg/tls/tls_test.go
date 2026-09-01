@@ -229,6 +229,9 @@ func TestResolve(t *testing.T) {
 				t.Error("TLSOpts should not be empty")
 			}
 			cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+			if tt.wantMinVersion != tls.VersionTLS13 {
+				cfg.MinVersion = tls.VersionTLS13
+			}
 			for _, fn := range result.TLSOpts {
 				fn(cfg)
 			}
