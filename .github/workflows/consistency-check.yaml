@@ -82,7 +82,17 @@ jobs:
 
       - name: Update CRD/RBAC YAML files
         working-directory: ./ray-operator
-        run: make manifests
+        run: |
+          for attempt in 1 2 3; do
+            if make manifests; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Attempt $attempt failed. Retrying in 10 seconds..."
+              sleep 10
+            fi
+          done
+          exit 1
 
       - name: Verify Changed files
         id: verify-changed-files

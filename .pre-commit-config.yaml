@@ -71,7 +71,7 @@ repos:
       - id: eslint
         name: ESLint TypeScript/JavaScript check
         entry: ./scripts/dashboard-lint.sh
-        language: node
+        language: system
         require_serial: true
         pass_filenames: true
         files: .*\.(js|jsx|ts|tsx|cjs|mjs)$
