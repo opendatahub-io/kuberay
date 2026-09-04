@@ -57,10 +57,6 @@
 
     # Test certificate and key files
     '''tests/data/.*\.(pem|crt|key)$''',
-
-    # KubeRay-specific: vendored yarn binary and redis test helper
-    '''dashboard/\.yarn/releases/.*''',
-    '''ray-operator/test/support/redis\.go''',
   ]
 
   # Known test/placeholder credentials used in documentation and tests
