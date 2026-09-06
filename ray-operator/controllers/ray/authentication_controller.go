@@ -111,6 +111,10 @@ func NewAuthenticationController(mgr manager.Manager, options RayClusterReconcil
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=referencegrants,verbs=get;list;watch;create;update;patch;delete
 
+// CodeFlareOperatorFinalizerAuth is the finalizer used by the old CodeFlare operator
+// We skip reconciliation when this finalizer is present to avoid conflicts during migration
+const CodeFlareOperatorFinalizerAuth = "ray.openshift.ai/oauth-finalizer"
+
 // Reconcile handles authentication-related resources and manages OAuth sidecar injection
 func (r *AuthenticationController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := ctrl.LoggerFrom(ctx).WithName("authentication-controller")
@@ -135,6 +139,18 @@ func (r *AuthenticationController) Reconcile(ctx context.Context, req ctrl.Reque
 	if !rayCluster.DeletionTimestamp.IsZero() {
 		logger.Info("RayCluster is being deleted, running finalizer", "cluster", rayCluster.Name)
 		return r.handleDeletion(ctx, rayCluster, logger)
+	}
+
+	// Skip reconciliation if CodeFlare finalizer is present - migration must complete first
+	// This prevents conflicts during the one-time migration from CodeFlare operator
+	// The AuthenticationController modifies the RayCluster CR (adds finalizers, sets enableIngress),
+	// which would cause optimistic concurrency conflicts with the migration Update()
+	for _, finalizer := range rayCluster.Finalizers {
+		if finalizer == CodeFlareOperatorFinalizerAuth {
+			logger.Info("CodeFlare finalizer present, skipping authentication reconciliation until migration completes",
+				"rayCluster", rayCluster.Name, "finalizer", CodeFlareOperatorFinalizerAuth)
+			return ctrl.Result{RequeueAfter: MediumRequeueDelay}, nil
+		}
 	}
 
 	// Skip if managed by external controller

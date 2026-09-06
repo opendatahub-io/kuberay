@@ -12,9 +12,12 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	configapi "github.com/ray-project/kuberay/ray-operator/apis/config/v1alpha1"
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
@@ -132,6 +135,10 @@ func NewRayClusterMTLSController(client client.Client, scheme *runtime.Scheme, c
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 
+// CodeFlareOperatorFinalizer is the finalizer used by the old CodeFlare operator
+// We skip reconciliation when this finalizer is present to avoid conflicts during migration
+const CodeFlareOperatorFinalizerMTLS = "ray.openshift.ai/oauth-finalizer"
+
 // Reconcile handles the reconciliation of CA certificates using cert-manager
 func (r *RayClusterMTLSController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -145,6 +152,16 @@ func (r *RayClusterMTLSController) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		logger.Error(err, "Failed to get RayCluster")
 		return ctrl.Result{}, err
+	}
+
+	// Skip reconciliation if CodeFlare finalizer is present - migration must complete first
+	// This prevents conflicts during the one-time migration from CodeFlare operator
+	for _, finalizer := range instance.Finalizers {
+		if finalizer == CodeFlareOperatorFinalizerMTLS {
+			logger.Info("CodeFlare finalizer present, skipping MTLS reconciliation until migration completes",
+				"rayCluster", instance.Name, "finalizer", CodeFlareOperatorFinalizerMTLS)
+			return ctrl.Result{RequeueAfter: RayClusterMTLSDefaultRequeueDuration}, nil
+		}
 	}
 
 	// Check if MTLS is enabled via annotation
@@ -737,8 +754,10 @@ func (r *RayClusterMTLSController) createRayWorkerCertificate(ctx context.Contex
 	return nil
 }
 
-// checkCertificatesReady checks if all certificates are ready
+// checkCertificatesReady checks if all certificates are ready AND their secrets exist
 func (r *RayClusterMTLSController) checkCertificatesReady(ctx context.Context, instance *rayv1.RayCluster) (bool, error) {
+	logger := log.FromContext(ctx)
+
 	// Check Ray head certificate
 	rayHeadCertificate := &certmanagerv1.Certificate{}
 	err := r.Get(ctx, client.ObjectKey{Name: fmt.Sprintf("%s-%s", rayHeadCertName, instance.Name), Namespace: instance.Namespace}, rayHeadCertificate)
@@ -753,7 +772,39 @@ func (r *RayClusterMTLSController) checkCertificatesReady(ctx context.Context, i
 		return false, err
 	}
 
-	return r.isCertificateReady(rayHeadCertificate) && r.isCertificateReady(rayWorkerCertificate), nil
+	// Check if Certificate CRs are Ready
+	if !r.isCertificateReady(rayHeadCertificate) || !r.isCertificateReady(rayWorkerCertificate) {
+		return false, nil
+	}
+
+	// Also verify the actual Secrets exist and have required keys
+	// This ensures we're in sync with what the main reconciler checks
+	headSecretName := fmt.Sprintf("%s-%s", rayHeadSecretName, instance.Name)
+	workerSecretName := fmt.Sprintf("%s-%s", rayWorkerSecretName, instance.Name)
+
+	headSecret := &corev1.Secret{}
+	if err := r.Get(ctx, client.ObjectKey{Name: headSecretName, Namespace: instance.Namespace}, headSecret); err != nil {
+		logger.V(1).Info("Head certificate secret not found yet", "secret", headSecretName, "error", err)
+		return false, nil
+	}
+
+	workerSecret := &corev1.Secret{}
+	if err := r.Get(ctx, client.ObjectKey{Name: workerSecretName, Namespace: instance.Namespace}, workerSecret); err != nil {
+		logger.V(1).Info("Worker certificate secret not found yet", "secret", workerSecretName, "error", err)
+		return false, nil
+	}
+
+	// Verify secrets have required keys
+	if _, ok := headSecret.Data["tls.crt"]; !ok {
+		logger.V(1).Info("Head secret missing tls.crt", "secret", headSecretName)
+		return false, nil
+	}
+	if _, ok := workerSecret.Data["tls.crt"]; !ok {
+		logger.V(1).Info("Worker secret missing tls.crt", "secret", workerSecretName)
+		return false, nil
+	}
+
+	return true, nil
 }
 
 // checkCertificateExpiry checks if certificates are close to expiry and logs warnings
@@ -832,7 +883,76 @@ func (r *RayClusterMTLSController) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("raycluster-mtls").
 		For(&rayv1.RayCluster{}).
+		// Watch for Certificate changes to re-reconcile when cert-manager updates them
+		Watches(
+			&certmanagerv1.Certificate{},
+			handler.EnqueueRequestsFromMapFunc(r.certificateToRayCluster),
+		).
+		// Watch for Secret changes to re-reconcile when cert-manager creates the secrets
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(r.secretToRayCluster),
+		).
 		Complete(r)
+}
+
+// certificateToRayCluster maps Certificate events to RayCluster reconcile requests
+func (r *RayClusterMTLSController) certificateToRayCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	cert, ok := obj.(*certmanagerv1.Certificate)
+	if !ok {
+		return nil
+	}
+
+	// Check if this certificate belongs to a RayCluster (has the ray.io/cluster-name label)
+	clusterName, hasLabel := cert.Labels["ray.io/cluster-name"]
+	if !hasLabel {
+		return nil
+	}
+
+	return []reconcile.Request{
+		{
+			NamespacedName: types.NamespacedName{
+				Name:      clusterName,
+				Namespace: cert.Namespace,
+			},
+		},
+	}
+}
+
+// secretToRayCluster maps Secret events to RayCluster reconcile requests
+func (r *RayClusterMTLSController) secretToRayCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	secret, ok := obj.(*corev1.Secret)
+	if !ok {
+		return nil
+	}
+
+	// Only watch secrets that look like mTLS certificate secrets
+	// These are named ray-head-secret-<cluster> or ray-worker-secret-<cluster>
+	name := secret.Name
+	if !strings.HasPrefix(name, "ray-head-secret-") && !strings.HasPrefix(name, "ray-worker-secret-") {
+		return nil
+	}
+
+	// Extract cluster name from secret name
+	var clusterName string
+	if strings.HasPrefix(name, "ray-head-secret-") {
+		clusterName = strings.TrimPrefix(name, "ray-head-secret-")
+	} else {
+		clusterName = strings.TrimPrefix(name, "ray-worker-secret-")
+	}
+
+	if clusterName == "" {
+		return nil
+	}
+
+	return []reconcile.Request{
+		{
+			NamespacedName: types.NamespacedName{
+				Name:      clusterName,
+				Namespace: secret.Namespace,
+			},
+		},
+	}
 }
 
 func (r *RayClusterMTLSController) createCACertificate(ctx context.Context, instance *rayv1.RayCluster) error {

@@ -1,0 +1,83 @@
+# RayCluster with custom volumes and mounts that should be PRESERVED after migration
+# The migration should only remove CodeFlare volumes (ca-vol, server-cert, proxy-tls-secret)
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: raycluster-custom-volumes
+  namespace: test-migration
+spec:
+  rayVersion: '2.46.0'
+  headGroupSpec:
+    rayStartParams:
+      dashboard-host: '0.0.0.0'
+    template:
+      spec:
+        containers:
+        - name: ray-head
+          image: rayproject/ray:2.46.0
+          ports:
+          - containerPort: 6379
+            name: gcs
+          - containerPort: 8265
+            name: dashboard
+          volumeMounts:
+          # Custom volume mounts - SHOULD BE PRESERVED
+          - mountPath: /tmp/ray
+            name: ray-logs
+          - mountPath: /data
+            name: shared-data
+          - mountPath: /config
+            name: app-config
+          - mountPath: /creds
+            name: credentials
+            readOnly: true
+          resources:
+            limits:
+              cpu: "1"
+              memory: "2G"
+            requests:
+              cpu: "500m"
+              memory: "2G"
+        volumes:
+        # Custom volumes - SHOULD BE PRESERVED
+        - name: ray-logs
+          emptyDir: {}
+        - name: shared-data
+          persistentVolumeClaim:
+            claimName: ray-data-pvc
+        - name: app-config
+          configMap:
+            name: ray-app-config
+        - name: credentials
+          secret:
+            secretName: app-credentials
+  workerGroupSpecs:
+  - replicas: 1
+    minReplicas: 1
+    maxReplicas: 5
+    groupName: worker-group
+    rayStartParams: {}
+    template:
+      spec:
+        containers:
+        - name: ray-worker
+          image: rayproject/ray:2.46.0
+          volumeMounts:
+          # Custom worker volume mounts - SHOULD BE PRESERVED
+          - mountPath: /tmp/ray
+            name: ray-logs
+          - mountPath: /data
+            name: shared-data
+          resources:
+            limits:
+              cpu: "1"
+              memory: "1G"
+            requests:
+              cpu: "500m"
+              memory: "1G"
+        volumes:
+        - name: ray-logs
+          emptyDir: {}
+        - name: shared-data
+          persistentVolumeClaim:
+            claimName: ray-data-pvc

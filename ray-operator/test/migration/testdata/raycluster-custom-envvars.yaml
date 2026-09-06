@@ -1,0 +1,74 @@
+# RayCluster with custom environment variables that should be PRESERVED after migration
+# The migration should only remove CodeFlare TLS env vars (MY_POD_IP, RAY_USE_TLS, etc.)
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: raycluster-custom-envvars
+  namespace: test-migration
+spec:
+  rayVersion: '2.46.0'
+  headGroupSpec:
+    rayStartParams:
+      dashboard-host: '0.0.0.0'
+    template:
+      spec:
+        containers:
+        - name: ray-head
+          image: rayproject/ray:2.46.0
+          ports:
+          - containerPort: 6379
+            name: gcs
+          - containerPort: 8265
+            name: dashboard
+          env:
+          # Custom env vars - SHOULD BE PRESERVED
+          - name: MY_CUSTOM_VAR
+            value: "custom-value"
+          - name: RAY_OBJECT_STORE_MEMORY
+            value: "1000000000"
+          - name: RAY_WORKER_REGISTER_TIMEOUT_SECONDS
+            value: "120"
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                name: aws-creds
+                key: access-key-id
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          resources:
+            limits:
+              cpu: "1"
+              memory: "2G"
+            requests:
+              cpu: "500m"
+              memory: "2G"
+  workerGroupSpecs:
+  - replicas: 1
+    minReplicas: 1
+    maxReplicas: 5
+    groupName: worker-group
+    rayStartParams: {}
+    template:
+      spec:
+        containers:
+        - name: ray-worker
+          image: rayproject/ray:2.46.0
+          env:
+          # Custom worker env vars - SHOULD BE PRESERVED
+          - name: WORKER_CUSTOM_VAR
+            value: "worker-value"
+          - name: RAY_OBJECT_STORE_MEMORY
+            value: "500000000"
+          resources:
+            limits:
+              cpu: "1"
+              memory: "1G"
+            requests:
+              cpu: "500m"
+              memory: "1G"
