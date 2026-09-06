@@ -142,8 +142,15 @@ var _ = Context("NetworkPolicy Controller Integration Tests", func() {
 			Expect(headNetworkPolicy.OwnerReferences[0].Name).To(Equal(rayCluster.Name))
 			Expect(headNetworkPolicy.OwnerReferences[0].Kind).To(Equal("RayCluster"))
 
-			// Verify policy type
-			Expect(headNetworkPolicy.Spec.PolicyTypes).To(Equal([]networkingv1.PolicyType{networkingv1.PolicyTypeIngress}))
+			// Verify policy types (egress declared so this policy overrides any default-deny)
+			Expect(headNetworkPolicy.Spec.PolicyTypes).To(Equal([]networkingv1.PolicyType{
+				networkingv1.PolicyTypeIngress,
+				networkingv1.PolicyTypeEgress,
+			}))
+			// Single allow-all egress rule
+			Expect(headNetworkPolicy.Spec.Egress).To(HaveLen(1))
+			Expect(headNetworkPolicy.Spec.Egress[0].Ports).To(BeEmpty())
+			Expect(headNetworkPolicy.Spec.Egress[0].To).To(BeEmpty())
 
 			// Verify pod selector targets head pods only
 			expectedPodSelector := metav1.LabelSelector{

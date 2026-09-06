@@ -155,8 +155,16 @@ func TestBuildHeadNetworkPolicy_BasicCluster(t *testing.T) {
 	}
 	assert.Equal(t, expectedLabels, policy.Labels)
 
-	// Verify policy type
-	assert.Equal(t, []networkingv1.PolicyType{networkingv1.PolicyTypeIngress}, policy.Spec.PolicyTypes)
+	// Verify policy types (egress required so this policy overrides any default-deny)
+	assert.Equal(t, []networkingv1.PolicyType{
+		networkingv1.PolicyTypeIngress,
+		networkingv1.PolicyTypeEgress,
+	}, policy.Spec.PolicyTypes)
+
+	// Single allow-all egress rule (empty rule = allow all destinations/ports)
+	require.Len(t, policy.Spec.Egress, 1)
+	assert.Empty(t, policy.Spec.Egress[0].Ports)
+	assert.Empty(t, policy.Spec.Egress[0].To)
 
 	// Verify pod selector targets head pods only
 	expectedPodSelector := metav1.LabelSelector{
