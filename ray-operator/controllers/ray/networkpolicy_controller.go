@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	routev1 "github.com/openshift/api/route/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -42,6 +43,13 @@ func NewNetworkPolicyController(mgr manager.Manager) *NetworkPolicyController {
 	}
 }
 
+// CodeFlareOperatorFinalizer is the finalizer used by the old CodeFlare operator
+// We skip reconciliation when this finalizer is present to avoid conflicts during migration
+const CodeFlareOperatorFinalizerNetworkPolicy = "ray.openshift.ai/oauth-finalizer"
+
+// DefaultRequeueDelayNetworkPolicy is the default requeue delay for NetworkPolicy controller
+const DefaultRequeueDelayNetworkPolicy = 30 * time.Second
+
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;delete;patch
 // +kubebuilder:rbac:groups=ray.io,resources=rayclusters,verbs=get;list;watch
 
@@ -64,6 +72,16 @@ func (r *NetworkPolicyController) Reconcile(ctx context.Context, req ctrl.Reques
 	if instance.DeletionTimestamp != nil {
 		logger.Info("RayCluster is being deleted, NetworkPolicies will be garbage collected")
 		return ctrl.Result{}, nil
+	}
+
+	// Skip reconciliation if CodeFlare finalizer is present - migration must complete first
+	// This prevents conflicts during the one-time migration from CodeFlare operator
+	for _, finalizer := range instance.Finalizers {
+		if finalizer == CodeFlareOperatorFinalizerNetworkPolicy {
+			logger.Info("CodeFlare finalizer present, skipping NetworkPolicy reconciliation until migration completes",
+				"rayCluster", instance.Name, "finalizer", CodeFlareOperatorFinalizerNetworkPolicy)
+			return ctrl.Result{RequeueAfter: DefaultRequeueDelayNetworkPolicy}, nil
+		}
 	}
 
 	// Check if NetworkPolicy is enabled via annotation

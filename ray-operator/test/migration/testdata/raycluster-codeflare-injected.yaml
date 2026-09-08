@@ -1,0 +1,194 @@
+# RayCluster with CodeFlare-injected components that should be REMOVED after migration
+# This simulates a cluster that was managed by codeflare-operator
+#
+# NOTE: The finalizer (ray.openshift.ai/oauth-finalizer) is NOT included here because
+# codeflare-operator will automatically add it when the cluster is created in RHOAI 2.x.
+# This file represents what the cluster looks like AFTER codeflare-operator injection.
+#
+# After migration:
+# - initContainer "create-cert" should be REMOVED
+# - sidecar "oauth-proxy" should be REMOVED  
+# - env vars MY_POD_IP, RAY_USE_TLS, RAY_TLS_* should be REMOVED
+# - volumes ca-vol, server-cert, proxy-tls-secret should be REMOVED
+# - volume mounts ca-vol, server-cert should be REMOVED
+# - serviceAccountName ending in -oauth-proxy should be CLEARED
+# - Custom items should be PRESERVED
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: raycluster-codeflare-injected
+  namespace: test-migration
+  # NOTE: finalizer will be added by codeflare-operator webhook, not in user's YAML
+spec:
+  rayVersion: '2.46.0'
+  headGroupSpec:
+    enableIngress: true  # Should be set to false after migration
+    rayStartParams:
+      dashboard-host: '0.0.0.0'
+    template:
+      spec:
+        serviceAccountName: raycluster-codeflare-injected-oauth-proxy  # SHOULD BE CLEARED
+        initContainers:
+        # CodeFlare TLS init container - SHOULD BE REMOVED
+        - name: create-cert
+          image: rayproject/ray:2.46.0
+          command: ["/bin/sh", "-c", "openssl ..."]
+          env:
+          - name: MY_POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          volumeMounts:
+          - name: ca-vol
+            mountPath: /etc/ca/tls
+          - name: server-cert
+            mountPath: /etc/server/tls
+        # Custom init container - SHOULD BE PRESERVED
+        - name: data-prep
+          image: busybox:latest
+          command: ['sh', '-c', 'echo "Preparing data..."']
+        containers:
+        - name: ray-head
+          image: rayproject/ray:2.46.0
+          ports:
+          - containerPort: 6379
+            name: gcs
+          - containerPort: 8265
+            name: dashboard
+          env:
+          # CodeFlare TLS env vars - SHOULD BE REMOVED
+          - name: MY_POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          - name: RAY_USE_TLS
+            value: "1"
+          - name: RAY_TLS_SERVER_CERT
+            value: "/etc/server/tls/tls.crt"
+          - name: RAY_TLS_SERVER_KEY
+            value: "/etc/server/tls/tls.key"
+          - name: RAY_TLS_CA_CERT
+            value: "/etc/ca/tls/ca.crt"
+          # Custom env vars - SHOULD BE PRESERVED
+          - name: MY_CUSTOM_VAR
+            value: "custom-value"
+          - name: RAY_OBJECT_STORE_MEMORY
+            value: "1000000000"
+          volumeMounts:
+          # CodeFlare TLS volume mounts - SHOULD BE REMOVED
+          - name: ca-vol
+            mountPath: /etc/ca/tls
+            readOnly: true
+          - name: server-cert
+            mountPath: /etc/server/tls
+          # Custom volume mounts - SHOULD BE PRESERVED
+          - mountPath: /tmp/ray
+            name: ray-logs
+          - mountPath: /data
+            name: shared-data
+          resources:
+            limits:
+              cpu: "1"
+              memory: "2G"
+            requests:
+              cpu: "500m"
+              memory: "2G"
+        # CodeFlare OAuth proxy sidecar - SHOULD BE REMOVED
+        - name: oauth-proxy
+          image: registry.redhat.io/openshift4/ose-oauth-proxy:v4.12
+          args:
+          - --https-address=:8443
+          - --provider=openshift
+          ports:
+          - containerPort: 8443
+            name: oauth-proxy
+          volumeMounts:
+          - name: proxy-tls-secret
+            mountPath: /etc/tls/private
+        # Custom sidecar - SHOULD BE PRESERVED
+        - name: fluentbit
+          image: fluent/fluent-bit:3.2.2
+          volumeMounts:
+          - mountPath: /tmp/ray
+            name: ray-logs
+        volumes:
+        # CodeFlare TLS volumes - SHOULD BE REMOVED
+        - name: ca-vol
+          secret:
+            secretName: raycluster-codeflare-injected-ca-secret-abcde
+        - name: server-cert
+          emptyDir: {}
+        - name: proxy-tls-secret
+          secret:
+            secretName: raycluster-codeflare-injected-proxy-tls-secret
+        # Custom volumes - SHOULD BE PRESERVED
+        - name: ray-logs
+          emptyDir: {}
+        - name: shared-data
+          emptyDir: {}
+  workerGroupSpecs:
+  - replicas: 1
+    minReplicas: 1
+    maxReplicas: 5
+    groupName: worker-group
+    rayStartParams: {}
+    template:
+      spec:
+        serviceAccountName: raycluster-codeflare-injected-oauth-proxy-worker  # SHOULD BE CLEARED (matches pattern)
+        initContainers:
+        # CodeFlare TLS init container - SHOULD BE REMOVED
+        - name: create-cert
+          image: rayproject/ray:2.46.0
+          command: ["/bin/sh", "-c", "openssl ..."]
+          volumeMounts:
+          - name: ca-vol
+            mountPath: /etc/ca/tls
+          - name: server-cert
+            mountPath: /etc/server/tls
+        containers:
+        - name: ray-worker
+          image: rayproject/ray:2.46.0
+          env:
+          # CodeFlare TLS env vars - SHOULD BE REMOVED
+          - name: MY_POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          - name: RAY_USE_TLS
+            value: "1"
+          - name: RAY_TLS_SERVER_CERT
+            value: "/etc/server/tls/tls.crt"
+          - name: RAY_TLS_SERVER_KEY
+            value: "/etc/server/tls/tls.key"
+          - name: RAY_TLS_CA_CERT
+            value: "/etc/ca/tls/ca.crt"
+          # Custom env var - SHOULD BE PRESERVED
+          - name: WORKER_CUSTOM_VAR
+            value: "worker-value"
+          volumeMounts:
+          # CodeFlare TLS volume mounts - SHOULD BE REMOVED
+          - name: ca-vol
+            mountPath: /etc/ca/tls
+            readOnly: true
+          - name: server-cert
+            mountPath: /etc/server/tls
+          # Custom volume mount - SHOULD BE PRESERVED
+          - mountPath: /tmp/ray
+            name: ray-logs
+          resources:
+            limits:
+              cpu: "1"
+              memory: "1G"
+            requests:
+              cpu: "500m"
+              memory: "1G"
+        volumes:
+        # CodeFlare TLS volumes - SHOULD BE REMOVED
+        - name: ca-vol
+          secret:
+            secretName: raycluster-codeflare-injected-ca-secret-abcde
+        - name: server-cert
+          emptyDir: {}
+        # Custom volume - SHOULD BE PRESERVED
+        - name: ray-logs
+          emptyDir: {}
