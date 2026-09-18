@@ -921,9 +921,11 @@ func (r *AuthenticationController) ensureOAuthServiceAccount(ctx context.Context
 // OAuth sidecar is automatically injected by RayCluster controller during pod creation
 // Users must delete and recreate their RayCluster to enable OAuth on existing clusters
 
-func GetOIDCProxySidecar(cluster *rayv1.RayCluster) corev1.Container {
+func GetOIDCProxySidecar(cluster *rayv1.RayCluster, tlsArgs []string) corev1.Container {
 	namer := utils.NewResourceNamer(cluster)
 	configMapName := namer.ConfigMapName()
+	// kube-rbac-proxy generates its serving certificate when no cert/key files are supplied.
+	// The Ray dashboard is a loopback HTTP upstream, so it has no upstream TLS settings.
 	return corev1.Container{
 		Name:            oidcProxyContainerName,
 		Image:           oidcProxyContainerImage,
@@ -931,12 +933,12 @@ func GetOIDCProxySidecar(cluster *rayv1.RayCluster) corev1.Container {
 		Ports: []corev1.ContainerPort{
 			utils.CreateContainerPort(authProxyPort, oidcProxyPortName),
 		},
-		Args: []string{
+		Args: append([]string{
 			fmt.Sprintf("--secure-listen-address=0.0.0.0:%d", authProxyPort),
 			"--upstream=http://127.0.0.1:8265/",
 			"--config-file=/etc/kube-rbac-proxy/config.yaml",
 			"--logtostderr=true",
-		},
+		}, tlsArgs...),
 		VolumeMounts: []corev1.VolumeMount{
 			utils.CreateVolumeMount(configMapName, "/etc/kube-rbac-proxy/", true),
 		},

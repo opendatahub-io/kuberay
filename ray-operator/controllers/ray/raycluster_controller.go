@@ -89,6 +89,7 @@ type RayClusterReconcilerOptions struct {
 	WorkerSidecarContainers  []corev1.Container
 	DefaultContainerEnvs     []corev1.EnvVar
 	IsOpenShift              bool
+	OIDCProxyTLSArgs         []string
 }
 
 // Reconcile reads that state of the cluster for a RayCluster object and makes changes based on it
@@ -784,6 +785,10 @@ func (r *RayClusterReconciler) reconcilePods(ctx context.Context, instance *rayv
 			"Ray container terminated status", getRayContainerStateTerminated(headPod))
 
 		shouldDelete, reason := shouldDeletePod(headPod, rayv1.HeadNode)
+		if !shouldDelete && r.oidcProxyTLSProfileChanged(instance, headPod) {
+			shouldDelete = true
+			reason = fmt.Sprintf("OIDC proxy TLS profile changed; head Pod %s must be recreated", headPod.Name)
+		}
 
 		// Check if mTLS is enabled but pod doesn't have mTLS configuration
 		if !shouldDelete && r.isMTLSEnabled(instance) && !podHasMTLSConfiguration(headPod) {
@@ -1614,12 +1619,17 @@ func (r *RayClusterReconciler) buildHeadPod(ctx context.Context, instance rayv1.
 			&podConf.Spec,
 			&instance,
 			authMode,
-			GetOIDCProxySidecar,
+			func(cluster *rayv1.RayCluster) corev1.Container {
+				return GetOIDCProxySidecar(cluster, r.options.OIDCProxyTLSArgs)
+			},
 			GetOIDCProxyVolumes,
 			namer.ServiceAccountName(authMode),
 		)
 
 		if result.Injected {
+			if len(r.options.OIDCProxyTLSArgs) > 0 {
+				podConf.Annotations[utils.OIDCProxyTLSProfileAnnotationKey] = strings.Join(r.options.OIDCProxyTLSArgs, ",")
+			}
 			logger.Info("Authentication sidecar injected successfully",
 				"cluster", instance.Name,
 				"authType", result.AuthType,
@@ -1643,6 +1653,17 @@ func (r *RayClusterReconciler) buildHeadPod(ctx context.Context, instance rayv1.
 	}
 
 	return pod
+}
+
+func (r *RayClusterReconciler) oidcProxyTLSProfileChanged(instance *rayv1.RayCluster, pod corev1.Pod) bool {
+	if len(r.options.OIDCProxyTLSArgs) == 0 {
+		return false
+	}
+	authMode := utils.DetectAuthenticationMode(r.options.IsOpenShift)
+	if !utils.ShouldEnableOAuth(instance, authMode) && !utils.ShouldEnableOIDC(instance, authMode) {
+		return false
+	}
+	return pod.Annotations[utils.OIDCProxyTLSProfileAnnotationKey] != strings.Join(r.options.OIDCProxyTLSArgs, ",")
 }
 
 func getCreatorCRDType(instance rayv1.RayCluster) utils.CRDType {

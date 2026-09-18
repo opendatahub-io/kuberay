@@ -3,6 +3,7 @@ package tls
 import (
 	"context"
 	"crypto/tls"
+	"reflect"
 	"testing"
 
 	configv1 "github.com/openshift/api/config/v1"
@@ -163,6 +164,46 @@ func TestParseProfile(t *testing.T) {
 				if c != tt.wantCiphers[i] {
 					t.Errorf("parseProfile() ciphers[%d] = %d, want %d", i, c, tt.wantCiphers[i])
 				}
+			}
+		})
+	}
+}
+
+func TestProxyTLSArgs(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile *configv1.TLSSecurityProfile
+		want    []string
+	}{
+		{
+			name:    "Intermediate",
+			profile: &configv1.TLSSecurityProfile{Type: configv1.TLSProfileIntermediateType},
+			want: []string{
+				"--tls-min-version=VersionTLS12",
+				"--tls-cipher-suites=TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+			},
+		},
+		{
+			name:    "Modern",
+			profile: &configv1.TLSSecurityProfile{Type: configv1.TLSProfileModernType},
+			want:    []string{"--tls-min-version=VersionTLS13"},
+		},
+		{
+			name: "Custom",
+			profile: &configv1.TLSSecurityProfile{Type: configv1.TLSProfileCustomType, Custom: &configv1.CustomTLSProfile{TLSProfileSpec: configv1.TLSProfileSpec{
+				MinTLSVersion: "VersionTLS12",
+				Ciphers:       []string{"ECDHE-RSA-AES256-GCM-SHA384"},
+			}}},
+			want: []string{
+				"--tls-min-version=VersionTLS12",
+				"--tls-cipher-suites=TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ProxyTLSArgs(tt.profile); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ProxyTLSArgs() = %v, want %v", got, tt.want)
 			}
 		})
 	}

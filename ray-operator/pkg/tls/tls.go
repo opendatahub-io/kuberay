@@ -55,6 +55,13 @@ var tlsVersionMap = map[configv1.TLSProtocolVersion]uint16{
 	"VersionTLS13": tls.VersionTLS13,
 }
 
+var tlsVersionFlag = map[uint16]string{
+	tls.VersionTLS10: "VersionTLS10",
+	tls.VersionTLS11: "VersionTLS11",
+	tls.VersionTLS12: "VersionTLS12",
+	tls.VersionTLS13: "VersionTLS13",
+}
+
 // Result holds the resolved TLS configuration.
 type Result struct {
 	TLSOpts        []func(*tls.Config)
@@ -180,6 +187,22 @@ func parseCustomProfile(custom *configv1.CustomTLSProfile) (uint16, []uint16) {
 		}
 	}
 	return minVersion, ciphers
+}
+
+// ProxyTLSArgs returns the kube-rbac-proxy flags that implement a TLS profile.
+// kube-rbac-proxy expects Go crypto/tls constant names for both values.
+func ProxyTLSArgs(profile *configv1.TLSSecurityProfile) []string {
+	minVersion, ciphers := parseProfile(profile)
+	args := []string{"--tls-min-version=" + tlsVersionFlag[minVersion]}
+	if len(ciphers) == 0 {
+		return args
+	}
+
+	cipherNames := make([]string, len(ciphers))
+	for i, cipher := range ciphers {
+		cipherNames[i] = tls.CipherSuiteName(cipher)
+	}
+	return append(args, "--tls-cipher-suites="+strings.Join(cipherNames, ","))
 }
 
 // SetupWatcher registers a controller that watches the APIServer resource

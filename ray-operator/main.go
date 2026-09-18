@@ -317,6 +317,9 @@ func main() {
 		BatchSchedulerManager:    batchSchedulerManager,
 		DefaultContainerEnvs:     config.DefaultContainerEnvs,
 	}
+	if tlsResult.ProfileFetched {
+		rayClusterOptions.OIDCProxyTLSArgs = pkgtls.ProxyTLSArgs(tlsResult.Profile)
+	}
 	exitOnError(ray.NewReconciler(ctx, mgr, rayClusterOptions).SetupWithManager(mgr, config.ReconcileConcurrency),
 		"unable to create controller", "controller", "RayCluster")
 
