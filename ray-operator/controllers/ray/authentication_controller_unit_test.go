@@ -701,7 +701,7 @@ func TestGetOIDCProxySidecar(t *testing.T) {
 		},
 	}
 
-	container := GetOIDCProxySidecar(cluster)
+	container := GetOIDCProxySidecar(cluster, []string{"--tls-min-version=VersionTLS12"})
 
 	assert.Equal(t, oidcProxyContainerName, container.Name)
 	assert.Equal(t, oidcProxyContainerImage, container.Image)
@@ -712,6 +712,7 @@ func TestGetOIDCProxySidecar(t *testing.T) {
 	// Verify port configuration
 	assert.Equal(t, int32(authProxyPort), container.Ports[0].ContainerPort)
 	assert.Equal(t, oidcProxyPortName, container.Ports[0].Name)
+	assert.Contains(t, container.Args, "--tls-min-version=VersionTLS12")
 
 	// Verify volume mount
 	assert.Equal(t, "kube-rbac-proxy-config-"+cluster.Name, container.VolumeMounts[0].Name)

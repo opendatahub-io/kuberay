@@ -2310,6 +2310,57 @@ func Test_TerminatedHead_RestartPolicy(t *testing.T) {
 	assert.Len(t, podList.Items, 1)
 }
 
+func TestReconcilePods_RollsHeadForOIDCProxyTLSProfile(t *testing.T) {
+	setupTest(t)
+
+	cluster := testRayCluster.DeepCopy()
+	cluster.Spec.WorkerGroupSpecs = nil
+	cluster.Annotations = map[string]string{utils.EnableSecureTrustedNetworkAnnotationKey: "true"}
+
+	newScheme := runtime.NewScheme()
+	_ = rayv1.AddToScheme(newScheme)
+	_ = corev1.AddToScheme(newScheme)
+	oldReconciler := &RayClusterReconciler{
+		Scheme: newScheme,
+		options: RayClusterReconcilerOptions{
+			IsOpenShift:      true,
+			OIDCProxyTLSArgs: []string{"--tls-min-version=VersionTLS12"},
+		},
+	}
+	oldHeadPod := oldReconciler.buildHeadPod(context.Background(), *cluster)
+	fakeClient := clientFake.NewClientBuilder().WithScheme(newScheme).WithRuntimeObjects(
+		&oldHeadPod,
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "ray-head-secret-" + cluster.Name, Namespace: cluster.Namespace}, Data: map[string][]byte{"tls.crt": {}, "tls.key": {}, "ca.crt": {}}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "ray-worker-secret-" + cluster.Name, Namespace: cluster.Namespace}, Data: map[string][]byte{"tls.crt": {}, "tls.key": {}, "ca.crt": {}}},
+	).Build()
+	r := &RayClusterReconciler{
+		Client:                     fakeClient,
+		Recorder:                   &record.FakeRecorder{},
+		Scheme:                     newScheme,
+		rayClusterScaleExpectation: expectations.NewRayClusterScaleExpectation(fakeClient),
+		options: RayClusterReconcilerOptions{
+			IsOpenShift:      true,
+			OIDCProxyTLSArgs: []string{"--tls-min-version=VersionTLS13"},
+		},
+	}
+
+	// A profile change is represented by an old (or absent) profile annotation.
+	err := r.reconcilePods(context.Background(), cluster)
+	require.Error(t, err)
+
+	pods := corev1.PodList{}
+	require.NoError(t, fakeClient.List(context.Background(), &pods, client.InNamespace(namespaceStr)))
+	assert.Empty(t, pods.Items)
+
+	// The replacement manifest includes both the profile stamp and the rendered proxy flag.
+	replacement := r.buildHeadPod(context.Background(), *cluster)
+	assert.Equal(t, "--tls-min-version=VersionTLS13", replacement.Annotations[utils.OIDCProxyTLSProfileAnnotationKey])
+	assert.Contains(t, replacement.Spec.Containers[len(replacement.Spec.Containers)-1].Args, "--tls-min-version=VersionTLS13")
+
+	cluster.Annotations = nil
+	assert.False(t, r.oidcProxyTLSProfileChanged(cluster, oldHeadPod))
+}
+
 func Test_RunningPods_RayContainerTerminated(t *testing.T) {
 	setupTest(t)
 

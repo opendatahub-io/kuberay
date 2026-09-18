@@ -27,6 +27,7 @@ const (
 	UpgradeStrategyRecreateHashKey           = "ray.io/upgrade-strategy-recreate-hash"
 	NumWorkerGroupsKey                       = "ray.io/num-worker-groups"
 	KubeRayVersion                           = "ray.io/kuberay-version"
+	OIDCProxyTLSProfileAnnotationKey         = "ray.io/oidc-proxy-tls-profile"
 
 	// NetworkPolicy annotation key - when present on a RayCluster, enables NetworkPolicy creation
 	EnableSecureTrustedNetworkAnnotationKey = "odh.ray.io/secure-trusted-network"
