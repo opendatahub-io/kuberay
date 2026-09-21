@@ -1,0 +1,394 @@
+================================================================================
+           CODEFLARE TO KUBERAY MIGRATION PLAN
+================================================================================
+
+EXECUTIVE SUMMARY
+-----------------
+This document describes the automated migration path for RayClusters upgrading
+from ODH/RHOAI versions that used codeflare-operator (RHOAI 2.x) to newer
+versions where KubeRay directly manages MTLS, NetworkPolicy, and Authentication
+(RHOAI 3.x+).
+
+The migration is FULLY AUTOMATED and requires no manual intervention from users.
+
+
+MIGRATION TRIGGER
+-----------------
+The migration is triggered by the presence of the CodeFlare operator finalizer:
+
+    ray.openshift.ai/oauth-finalizer
+
+This finalizer was added by codeflare-operator to all RayClusters it managed.
+Its presence indicates the cluster needs migration.
+
+
+================================================================================
+                    MIGRATION FLOW DIAGRAM (TEXT VERSION)
+================================================================================
+
+    +------------------------------------------------------------------+
+    |                  RayCluster Reconciliation Start                  |
+    +------------------------------------------------------------------+
+                                    |
+                                    v
+                    +-------------------------------+
+                    | CodeFlare Finalizer Present?  |
+                    +-------------------------------+
+                          |                    |
+                         NO                   YES
+                          |                    |
+                          v                    v
+              +-------------------+    +-------------------------------+
+              | Skip Migration    |    | Suspended for Migration?      |
+              | Continue Normal   |    +-------------------------------+
+              | Reconcile         |          |                    |
+              +-------------------+         NO                   YES
+                                            |                    |
+                                            v                    v
+                                   +=================+   +=================+
+                                   |    PHASE 1      |   |    PHASE 2      |
+                                   | Cleanup & Suspend|   | Complete & Unsuspend
+                                   +=================+   +=================+
+                                            |                    |
+                                            v                    v
+                                   +----------------+    +----------------+
+                                   | 1. Clean Pod   |    | All Pods       |
+                                   |    Specs       |    | Terminated?    |
+                                   +----------------+    +----------------+
+                                            |                 |        |
+                                            v                NO       YES
+                                   +----------------+         |        |
+                                   | 2. Add secure- |         v        v
+                                   |    trusted-    |    +--------+ +--------+
+                                   |    network     |    | Wait,  | | Remove |
+                                   |    annotation  |    | Requeue| | Finlzr |
+                                   +----------------+    +--------+ +--------+
+                                            |                          |
+                                            v                          v
+                                   +----------------+          +--------+
+                                   | 3. Backup CA   |          | Set    |
+                                   |    Secret      |          |Suspend |
+                                   +----------------+          | =FALSE |
+                                            |                  +--------+
+                                            v                          |
+                                   +----------------+                  v
+                                   | 4. Delete Old  |          +--------+
+                                   |  NetworkPolicies          | Update |
+                                   +----------------+          |   CR   |
+                                            |                  +--------+
+                                            v                          |
+                                   +----------------+                  v
+                                   | 5. Delete Old  |          +-------------+
+                                   |    CA Secret   |          | MIGRATION   |
+                                   +----------------+          | COMPLETE!   |
+                                            |                  | Pods will be|
+                                            v                  | recreated   |
+                                   +----------------+          +-------------+
+                                   | 6. Delete OAuth|
+                                   |    Resources   |
+                                   +----------------+
+                                            |
+                                            v
+                                   +================+
+                                   | 7. SET SUSPEND |
+                                   |    = TRUE      |
+                                   | Mark migration |
+                                   | in-progress    |
+                                   +================+
+                                            |
+                                            v
+                                   +----------------+
+                                   | 8. Update CR   |
+                                   | (keep finalizr)|
+                                   +----------------+
+                                            |
+                                            v
+                                   +----------------+
+                                   | Requeue -      |
+                                   | Pods will be   |
+                                   | deleted by     |
+                                   | reconcilePods  |
+                                   +----------------+
+
+
+================================================================================
+            OTHER CONTROLLERS DURING MIGRATION (CONFLICT PREVENTION)
+================================================================================
+
+    +--------------------+     +---------------------+     +--------------------+
+    | MTLS Controller    |     | NetworkPolicy       |     | Authentication     |
+    +--------------------+     | Controller          |     | Controller         |
+            |                  +---------------------+     +--------------------+
+            v                          |                           |
+    +-----------------+                v                           v
+    | CodeFlare       |        +-----------------+         +-----------------+
+    | Finalizer       |        | CodeFlare       |         | CodeFlare       |
+    | Present?        |        | Finalizer       |         | Finalizer       |
+    +-----------------+        | Present?        |         | Present?        |
+       |         |             +-----------------+         +-----------------+
+      YES        NO               |         |                 |         |
+       |         |               YES        NO               YES        NO
+       v         v                |         |                 |         |
+    +------+ +--------+           v         v                 v         v
+    | SKIP | | Normal |        +------+ +--------+         +------+ +--------+
+    |Reque-| |Reconcl-|        | SKIP | | Normal |         | SKIP | | Normal |
+    |ue 30s| |iation  |        |Reque-| |Reconcl-|         |Reque-| |Reconcl-|
+    +------+ +--------+        |ue 30s| |iation  |         |ue 10s| |iation  |
+                               +------+ +--------+         +------+ +--------+
+
+
+    AFTER MIGRATION COMPLETES (Finalizer Removed):
+    =============================================
+    
+    Next Reconcile Cycle
+           |
+           v
+    Finalizer is GONE
+           |
+           +---> MTLS Controller proceeds normally
+           |
+           +---> NetworkPolicy Controller proceeds normally
+           |
+           +---> Authentication Controller proceeds normally
+
+
+================================================================================
+                    CONFLICT PREVENTION STRATEGY
+================================================================================
+
+PROBLEM: Optimistic Concurrency Conflicts
+-----------------------------------------
+Multiple controllers watch RayClusters and may attempt to update them
+simultaneously:
+
+    Controller                    Updates CR?    Potential Conflict
+    --------------------------    -----------    ------------------
+    RayClusterReconciler (migr)   Yes            Primary
+    AuthenticationController      Yes            High (adds finalizer)
+    MTLSController                No             None
+    NetworkPolicyController       No             None
+
+
+SOLUTION: Finalizer-Based Coordination
+--------------------------------------
+All controllers check for the CodeFlare finalizer at the start of reconciliation
+and SKIP if present.
+
+WHY THIS WORKS:
+1. Migration runs first - Main controller handles migration before other ops
+2. Other controllers skip - They detect finalizer and requeue instead
+3. Single Update - Migration makes all changes in-memory, persists with one call
+4. Conflict recovery - If Update() fails, error causes requeue; next cycle retries
+5. Clean handoff - After finalizer removed, other controllers proceed normally
+
+
+================================================================================
+                    POD RESTART AND DATA RETENTION
+================================================================================
+
+WHY CLUSTER IS SUSPENDED (TWO-PHASE APPROACH)
+---------------------------------------------
+The migration uses a TWO-PHASE SUSPEND/UNSUSPEND approach to ensure
+consistent certificate rotation.
+
+CodeFlare and KubeRay use DIFFERENT Certificate Authorities for mTLS:
+- CodeFlare: Self-signed CA created by codeflare-operator
+- KubeRay: Cert-manager CA created by RayClusterMTLSController
+
+A rolling restart would cause certificate incompatibility:
+
+    Timeline WITHOUT suspend (PROBLEMATIC):
+    ─────────────────────────────────────────────────────────────────
+    T0: All pods have CodeFlare TLS (CA-A certificates)
+    T1: Head pod recreated with KubeRay TLS (CA-B certificates)
+    T2: Workers still have CA-A certificates
+        ❌ HEAD (CA-B) cannot communicate with WORKERS (CA-A)
+    T3: Workers recreated with CA-B
+    T4: All pods have CA-B - cluster healthy
+    ─────────────────────────────────────────────────────────────────
+        Window T1-T3: CLUSTER BROKEN (mixed certificates)
+
+By suspending the cluster:
+1. PHASE 1: All pods are gracefully terminated (standard K8s lifecycle)
+2. PHASE 2: After all pods are gone, cluster is unsuspended
+3. All pods are recreated simultaneously with the new CA
+
+This approach:
+- Uses standard Kubernetes/KubeRay suspend mechanism
+- Graceful termination (respects terminationGracePeriodSeconds)
+- Clear state transition (suspended -> unsuspended)
+- No mixed certificate window
+
+
+WHAT GETS LOST ON POD RESTART
+-----------------------------
+Data Type              Lost?      How to Preserve
+---------------------  ---------  ----------------------------------------
+In-memory object       YES        Use external storage (S3, GCS, MinIO)
+Actor state            YES        Use actor checkpointing
+Running tasks          YES        Use task retries (max_retries)
+GCS metadata           NO*        Enable GCS Fault Tolerance
+Submitted jobs         NO*        Enable GCS Fault Tolerance
+Cluster configuration  NO         Stored in RayCluster CR
+
+* With GCS Fault Tolerance enabled
+
+
+RECOMMENDED: Enable GCS Fault Tolerance BEFORE Migration
+--------------------------------------------------------
+For production clusters, enable GCS Fault Tolerance with Redis BEFORE upgrading:
+
+    apiVersion: ray.io/v1
+    kind: RayCluster
+    metadata:
+      name: my-cluster
+      annotations:
+        ray.io/ft-enabled: "true"
+    spec:
+      headGroupSpec:
+        rayStartParams:
+          redis-address: "redis:6379"     # External Redis for GCS storage
+          redis-password: "your-password"  # If using auth
+
+With GCS FT enabled:
+- Cluster metadata survives pod restarts
+- Job definitions are preserved
+- Actor placement groups are preserved
+- Workers automatically reconnect after head restart
+
+
+MIGRATION EVENTS
+----------------
+The migration emits Kubernetes events to inform users:
+
+Event                   Type      Phase   Message
+----------------------  --------  -----   ----------------------------------------
+MigrationStarted        Normal    1       Starting migration. Cluster will be
+                                          temporarily suspended.
+MigrationSuspending     Warning   1       Suspending cluster for certificate
+                                          rotation. Enable GCS FT to preserve state.
+MigrationComplete       Normal    2       Successfully migrated. Cluster unsuspended,
+                                          pods will be recreated.
+
+
+================================================================================
+                    WHAT GETS CLEANED UP
+================================================================================
+
+POD SPEC MODIFICATIONS (from CodeFlare webhook)
+-----------------------------------------------
+Component                    Source Location              Removed?
+-------------------------    ------------------------     --------
+oauth-proxy container        raycluster_webhook.go:38     YES
+proxy-tls-secret volume      raycluster_webhook.go:39     YES
+ca-vol volume                raycluster_webhook.go:341    YES
+server-cert volume           raycluster_webhook.go:348    YES
+ca-vol mount                 raycluster_webhook.go:297    YES
+server-cert mount            raycluster_webhook.go:301    YES
+MY_POD_IP env var            raycluster_webhook.go:311    YES
+RAY_USE_TLS env var          raycluster_webhook.go:319    YES
+RAY_TLS_SERVER_CERT env      raycluster_webhook.go:323    YES
+RAY_TLS_SERVER_KEY env       raycluster_webhook.go:327    YES
+RAY_TLS_CA_CERT env          raycluster_webhook.go:331    YES
+create-cert initContainer    raycluster_webhook.go:40     YES
+serviceAccountName           raycluster_webhook.go:89     YES (cleared)
+enableIngress: true          raycluster_webhook.go:220    YES (set to false)
+
+
+EXTERNAL RESOURCES (from CodeFlare controller)
+----------------------------------------------
+Resource              Name Pattern                         Action
+-------------------   ----------------------------------   ---------------
+Finalizer             ray.openshift.ai/oauth-finalizer     Removed
+CA Secret             ca-secret-{cluster}                  Backed up, deleted
+NetworkPolicy head    {cluster}-head                       Deleted
+NetworkPolicy wrkrs   {cluster}-workers                    Deleted
+ClusterRoleBinding    (by label lookup)                    Deleted
+OAuth Service         (by label lookup)                    Deleted
+OAuth Secret          (by label lookup)                    Deleted
+OAuth ServiceAccount  (by label lookup)                    Deleted
+Routes (OpenShift)    (by label lookup)                    Deleted
+
+
+================================================================================
+                    WHAT GETS ADDED
+================================================================================
+
+After cleanup, the migration adds:
+
+Item          Value                                   Purpose
+-----------   -------------------------------------   ---------------------------
+Annotation    odh.ray.io/secure-trusted-network:     Triggers KubeRay's MTLS
+              "true"                                  and NetworkPolicy controllers
+
+
+================================================================================
+                    IMPLEMENTATION DETAILS
+================================================================================
+
+FILES MODIFIED:
+
+1. raycluster_controller.go
+   - Added CodeFlareOperatorFinalizer constant
+   - Added cleanCodeFlareInjections() function
+   - Added migrateFromCodeFlare() function
+   - Integration point in rayClusterReconcile() (early in reconcile loop)
+
+2. raycluster_mtls_controller.go
+   - Added CodeFlare finalizer check at start of Reconcile()
+
+3. networkpolicy_controller.go
+   - Added CodeFlare finalizer check at start of Reconcile()
+
+4. authentication_controller.go
+   - Added CodeFlare finalizer check at start of Reconcile()
+
+
+================================================================================
+                    RISKS AND MITIGATIONS
+================================================================================
+
+Risk                              Mitigation
+--------------------------------  --------------------------------------------
+Update conflicts during           Controllers skip when finalizer present;
+migration                         conflicts cause requeue
+
+Pod disruption during             Migration only modifies CR; pod recreation
+migration                         is managed by KubeRay
+
+Lost CA certificates              CA secret is backed up before deletion
+
+Orphaned cluster-scoped           ClusterRoleBindings explicitly deleted by
+resources                         label lookup
+
+Partial migration failure         Finalizer remains until migration succeeds;
+                                  retries on error
+
+
+================================================================================
+                    BACKWARD COMPATIBILITY
+================================================================================
+
+- RayClusters WITHOUT the CodeFlare finalizer are unaffected
+- RayClusters WITH the finalizer are automatically migrated on first reconcile
+- Migration is IDEMPOTENT - running multiple times has no adverse effects
+- No manual intervention required from users
+
+
+================================================================================
+                    TIMELINE
+================================================================================
+
+Migration happens automatically during the FIRST RECONCILIATION after upgrade:
+
+1. User upgrades ODH/RHOAI (removes codeflare-operator, updates kuberay)
+2. KubeRay controller starts
+3. RayCluster reconciliation triggered
+4. Migration detects finalizer -> executes one-time migration
+5. Finalizer removed -> migration complete
+6. Subsequent reconciliations skip migration (no finalizer)
+
+
+================================================================================
+                    END OF DOCUMENT
+================================================================================
