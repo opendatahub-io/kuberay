@@ -343,6 +343,15 @@ func (r *NetworkPolicyController) buildHeadNetworkPolicy(ctx context.Context, in
 		})
 	}
 
+	// Declaring PolicyTypeEgress ensures this NetworkPolicy overrides any namespace-level default-deny
+	// egress policy. An allow-all egress rule is used rather than enumerating specific destinations
+	// because the head pod's egress requirements are platform-dependent (DNS, Kubernetes API, workers,
+	// node-local services, platform-specific OVN/SDN paths, etc.). The primary security boundary for
+	// the head pod is the ingress rules above.
+	egressRules := []networkingv1.NetworkPolicyEgressRule{
+		{},
+	}
+
 	return &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-head", instance.Name),
@@ -356,8 +365,12 @@ func (r *NetworkPolicyController) buildHeadNetworkPolicy(ctx context.Context, in
 					utils.RayNodeTypeLabelKey: string(rayv1.HeadNode),
 				},
 			},
-			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
-			Ingress:     ingressRules,
+			PolicyTypes: []networkingv1.PolicyType{
+				networkingv1.PolicyTypeIngress,
+				networkingv1.PolicyTypeEgress,
+			},
+			Ingress: ingressRules,
+			Egress:  egressRules,
 		},
 	}
 }
