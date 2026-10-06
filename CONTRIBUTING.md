@@ -1,5 +1,5 @@
 <!-- markdownlint-disable MD013 -->
-# Contributing
+# Contributing guide
 
 Thank you for investing your time in contributing to KubeRay project!
 
