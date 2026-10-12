@@ -20,15 +20,16 @@ func TestParseProfile(t *testing.T) {
 		name           string
 		wantCiphers    []uint16
 		wantMinVersion uint16
+		wantErr        bool
 	}{
 		{
-			name:           "nil profile returns Intermediate defaults",
+			name:           "nil profile resolves to Intermediate",
 			profile:        nil,
 			wantMinVersion: tls.VersionTLS12,
 			wantCiphers:    intermediateCiphers,
 		},
 		{
-			name:           "empty profile returns Intermediate defaults",
+			name:           "empty profile resolves to Intermediate",
 			profile:        &configv1.TLSSecurityProfile{},
 			wantMinVersion: tls.VersionTLS12,
 			wantCiphers:    intermediateCiphers,
@@ -42,7 +43,7 @@ func TestParseProfile(t *testing.T) {
 			wantCiphers:    intermediateCiphers,
 		},
 		{
-			name: "Modern returns TLS 1.3 with nil ciphers",
+			name: "Modern returns TLS 1.3 with nil ciphers (CipherSuites does not control TLS 1.3)",
 			profile: &configv1.TLSSecurityProfile{
 				Type: configv1.TLSProfileModernType,
 			},
@@ -50,12 +51,63 @@ func TestParseProfile(t *testing.T) {
 			wantCiphers:    nil,
 		},
 		{
-			name: "Old returns TLS 1.0 with nil ciphers",
+			name: "Old resolves to TLS 1.0 with explicit, runtime-supported suites",
 			profile: &configv1.TLSSecurityProfile{
 				Type: configv1.TLSProfileOldType,
 			},
 			wantMinVersion: tls.VersionTLS10,
-			wantCiphers:    nil,
+			wantCiphers: []uint16{
+				tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+				tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+				// DHE-RSA-* suites in the Old profile are dropped: Go's
+				// crypto/tls does not implement DHE key exchange at all.
+				tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,
+				tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA,
+				tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
+				// ECDHE-*-AES256-SHA384 (no 256 CBC variant in Go) dropped.
+				tls.TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+				// DHE-RSA-* suites dropped (no DHE support in Go).
+				tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_RSA_WITH_AES_128_CBC_SHA256,
+				// AES256-SHA256 (no 256 CBC variant in Go) dropped.
+				tls.TLS_RSA_WITH_AES_128_CBC_SHA,
+				tls.TLS_RSA_WITH_AES_256_CBC_SHA,
+				tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
+			},
+		},
+		{
+			name: "Unknown profile type returns an error, no silent Intermediate substitution",
+			profile: &configv1.TLSSecurityProfile{
+				Type: "SuperSecure",
+			},
+			wantErr: true,
+		},
+		{
+			name: "Custom type with nil custom block returns an error",
+			profile: &configv1.TLSSecurityProfile{
+				Type: configv1.TLSProfileCustomType,
+			},
+			wantErr: true,
+		},
+		{
+			name: "Custom with unknown minTLSVersion returns an error",
+			profile: &configv1.TLSSecurityProfile{
+				Type: configv1.TLSProfileCustomType,
+				Custom: &configv1.CustomTLSProfile{
+					TLSProfileSpec: configv1.TLSProfileSpec{
+						MinTLSVersion: "NotAVersion",
+						Ciphers:       []string{"ECDHE-ECDSA-AES128-GCM-SHA256"},
+					},
+				},
+			},
+			wantErr: true,
 		},
 		{
 			name: "Custom with valid ciphers",
@@ -65,6 +117,20 @@ func TestParseProfile(t *testing.T) {
 					TLSProfileSpec: configv1.TLSProfileSpec{
 						MinTLSVersion: "VersionTLS12",
 						Ciphers:       []string{"ECDHE-ECDSA-AES128-GCM-SHA256", "ECDHE-RSA-AES256-GCM-SHA384"},
+					},
+				},
+			},
+			wantMinVersion: tls.VersionTLS12,
+			wantCiphers:    []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384},
+		},
+		{
+			name: "Custom accepts IANA names as well as OpenSSL aliases",
+			profile: &configv1.TLSSecurityProfile{
+				Type: configv1.TLSProfileCustomType,
+				Custom: &configv1.CustomTLSProfile{
+					TLSProfileSpec: configv1.TLSProfileSpec{
+						MinTLSVersion: "VersionTLS12",
+						Ciphers:       []string{"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256", "ECDHE-RSA-AES256-GCM-SHA384"},
 					},
 				},
 			},
@@ -86,7 +152,7 @@ func TestParseProfile(t *testing.T) {
 			wantCiphers:    []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
 		},
 		{
-			name: "Custom with all unsupported ciphers returns empty slice",
+			name: "Custom with all-unusable TLS <=1.2 ciphers returns an error",
 			profile: &configv1.TLSSecurityProfile{
 				Type: configv1.TLSProfileCustomType,
 				Custom: &configv1.CustomTLSProfile{
@@ -96,8 +162,7 @@ func TestParseProfile(t *testing.T) {
 					},
 				},
 			},
-			wantMinVersion: tls.VersionTLS12,
-			wantCiphers:    []uint16{},
+			wantErr: true,
 		},
 		{
 			name: "Custom with whitespace-padded cipher names still resolves",
@@ -128,18 +193,31 @@ func TestParseProfile(t *testing.T) {
 			wantCiphers:    []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
 		},
 		{
-			name: "Unknown type falls back to Intermediate",
+			name: "Custom Modern-equivalent minTLSVersion returns TLS 1.3 with nil ciphers",
 			profile: &configv1.TLSSecurityProfile{
-				Type: "SuperSecure",
+				Type: configv1.TLSProfileCustomType,
+				Custom: &configv1.CustomTLSProfile{
+					TLSProfileSpec: configv1.TLSProfileSpec{
+						MinTLSVersion: "VersionTLS13",
+						Ciphers:       []string{"TLS_AES_128_GCM_SHA256"},
+					},
+				},
 			},
-			wantMinVersion: tls.VersionTLS12,
-			wantCiphers:    intermediateCiphers,
+			wantMinVersion: tls.VersionTLS13,
+			wantCiphers:    nil,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotMinVersion, gotCiphers := parseProfile(tt.profile)
+			gotMinVersion, gotCiphers, err := parseProfile(tt.profile)
+
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseProfile() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
 
 			if gotMinVersion != tt.wantMinVersion {
 				t.Errorf("parseProfile() minVersion = %d, want %d", gotMinVersion, tt.wantMinVersion)
@@ -152,11 +230,8 @@ func TestParseProfile(t *testing.T) {
 				return
 			}
 
-			if gotCiphers == nil {
-				t.Fatal("expected non-nil empty slice, got nil")
-			}
 			if len(gotCiphers) != len(tt.wantCiphers) {
-				t.Errorf("parseProfile() ciphers length = %d, want %d", len(gotCiphers), len(tt.wantCiphers))
+				t.Errorf("parseProfile() ciphers = %v, want %v", gotCiphers, tt.wantCiphers)
 				return
 			}
 			for i, c := range gotCiphers {
@@ -203,6 +278,81 @@ func TestResolve(t *testing.T) {
 			wantProfileFetched: true,
 			wantMinVersion:     tls.VersionTLS13,
 			wantNilCiphers:     true,
+		},
+		{
+			name: "APIServer with Old profile resolves to explicit, runtime-supported suites",
+			objects: []runtime.Object{
+				&configv1.APIServer{
+					ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+					Spec: configv1.APIServerSpec{
+						TLSSecurityProfile: &configv1.TLSSecurityProfile{
+							Type: configv1.TLSProfileOldType,
+						},
+					},
+				},
+			},
+			wantProfileFetched: true,
+			wantMinVersion:     tls.VersionTLS10,
+		},
+		{
+			name: "APIServer with Custom profile using supported OpenSSL aliases",
+			objects: []runtime.Object{
+				&configv1.APIServer{
+					ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+					Spec: configv1.APIServerSpec{
+						TLSSecurityProfile: &configv1.TLSSecurityProfile{
+							Type: configv1.TLSProfileCustomType,
+							Custom: &configv1.CustomTLSProfile{
+								TLSProfileSpec: configv1.TLSProfileSpec{
+									MinTLSVersion: "VersionTLS12",
+									Ciphers:       []string{"ECDHE-ECDSA-AES128-GCM-SHA256"},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantProfileFetched: true,
+			wantMinVersion:     tls.VersionTLS12,
+		},
+		{
+			name: "APIServer with malformed Custom profile (unknown minTLSVersion) is a fatal error",
+			objects: []runtime.Object{
+				&configv1.APIServer{
+					ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+					Spec: configv1.APIServerSpec{
+						TLSSecurityProfile: &configv1.TLSSecurityProfile{
+							Type: configv1.TLSProfileCustomType,
+							Custom: &configv1.CustomTLSProfile{
+								TLSProfileSpec: configv1.TLSProfileSpec{
+									MinTLSVersion: "NotAVersion",
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "APIServer with Custom profile where every cipher is unusable is a fatal error",
+			objects: []runtime.Object{
+				&configv1.APIServer{
+					ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+					Spec: configv1.APIServerSpec{
+						TLSSecurityProfile: &configv1.TLSSecurityProfile{
+							Type: configv1.TLSProfileCustomType,
+							Custom: &configv1.CustomTLSProfile{
+								TLSProfileSpec: configv1.TLSProfileSpec{
+									MinTLSVersion: "VersionTLS12",
+									Ciphers:       []string{"DHE-RSA-AES128-GCM-SHA256"},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
 		},
 	}
 
