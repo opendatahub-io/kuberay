@@ -51,7 +51,13 @@ func TestParseProfile(t *testing.T) {
 			wantCiphers:    nil,
 		},
 		{
-			name: "Old resolves to TLS 1.0 with explicit, runtime-supported suites",
+			// The Old profile's canonical cipher list (configv1.TLSProfiles)
+			// also lists DHE-RSA-* suites (Go has no DHE support at all) and
+			// a number of CBC/3DES suites. CBC and 3DES are banned outright
+			// by isBannedCipherName regardless of profile, so only the
+			// AEAD (GCM/ChaCha20) suites survive filtering -- see
+			// TestParseProfile_RejectsBannedCiphers for the explicit checks.
+			name: "Old resolves to TLS 1.0 with explicit, runtime-supported, non-banned suites",
 			profile: &configv1.TLSSecurityProfile{
 				Type: configv1.TLSProfileOldType,
 			},
@@ -63,23 +69,8 @@ func TestParseProfile(t *testing.T) {
 				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
 				tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
 				tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
-				// DHE-RSA-* suites in the Old profile are dropped: Go's
-				// crypto/tls does not implement DHE key exchange at all.
-				tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,
-				tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256,
-				tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA,
-				tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
-				// ECDHE-*-AES256-SHA384 (no 256 CBC variant in Go) dropped.
-				tls.TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA,
-				tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
-				// DHE-RSA-* suites dropped (no DHE support in Go).
 				tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
 				tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
-				tls.TLS_RSA_WITH_AES_128_CBC_SHA256,
-				// AES256-SHA256 (no 256 CBC variant in Go) dropped.
-				tls.TLS_RSA_WITH_AES_128_CBC_SHA,
-				tls.TLS_RSA_WITH_AES_256_CBC_SHA,
-				tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
 			},
 		},
 		{
@@ -238,6 +229,76 @@ func TestParseProfile(t *testing.T) {
 				if c != tt.wantCiphers[i] {
 					t.Errorf("parseProfile() ciphers[%d] = %d, want %d", i, c, tt.wantCiphers[i])
 				}
+			}
+		})
+	}
+}
+
+// TestParseProfile_RejectsBannedCiphers is a regression test for a
+// GitHub Advanced Security / CodeQL finding (tls-config-lint: "3DES/CBC
+// cipher suite"): CBC-mode suites and 3DES must never be negotiable,
+// regardless of whether they are requested via an OpenSSL-style alias (as
+// listed in OpenShift's own "Old" named profile) or via a raw IANA cipher
+// suite name in a Custom profile. RC4 is included for the same reason,
+// since it is reachable the same way even though it was not itself
+// flagged.
+func TestParseProfile_RejectsBannedCiphers(t *testing.T) {
+	bannedNames := []string{
+		// OpenSSL-style aliases for suites OpenShift's "Old" profile lists.
+		"DES-CBC3-SHA",
+		"AES128-SHA",
+		"AES256-SHA",
+		"AES128-SHA256",
+		"ECDHE-RSA-AES128-SHA",
+		"ECDHE-ECDSA-AES128-SHA",
+		"ECDHE-RSA-AES256-SHA",
+		"ECDHE-ECDSA-AES256-SHA",
+		// Raw IANA names: implemented by Go, and so reachable via the
+		// byName path in resolveCipherName even though openSSLToGoCipher
+		// has no entry for them.
+		"TLS_RSA_WITH_3DES_EDE_CBC_SHA",
+		"TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA",
+		"TLS_RSA_WITH_AES_128_CBC_SHA",
+		"TLS_RSA_WITH_AES_256_CBC_SHA",
+		"TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+		"TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256",
+		"TLS_RSA_WITH_RC4_128_SHA",
+		"TLS_ECDHE_RSA_WITH_RC4_128_SHA",
+	}
+
+	for _, name := range bannedNames {
+		t.Run(name+" alone is rejected", func(t *testing.T) {
+			profile := &configv1.TLSSecurityProfile{
+				Type: configv1.TLSProfileCustomType,
+				Custom: &configv1.CustomTLSProfile{
+					TLSProfileSpec: configv1.TLSProfileSpec{
+						MinTLSVersion: "VersionTLS12",
+						Ciphers:       []string{name},
+					},
+				},
+			}
+			_, _, err := parseProfile(profile)
+			if err == nil {
+				t.Fatalf("parseProfile() with only banned cipher %q: error = nil, want error", name)
+			}
+		})
+
+		t.Run(name+" is dropped when mixed with a good cipher", func(t *testing.T) {
+			profile := &configv1.TLSSecurityProfile{
+				Type: configv1.TLSProfileCustomType,
+				Custom: &configv1.CustomTLSProfile{
+					TLSProfileSpec: configv1.TLSProfileSpec{
+						MinTLSVersion: "VersionTLS12",
+						Ciphers:       []string{name, "ECDHE-ECDSA-AES128-GCM-SHA256"},
+					},
+				},
+			}
+			_, ciphers, err := parseProfile(profile)
+			if err != nil {
+				t.Fatalf("parseProfile() error = %v, want nil", err)
+			}
+			if len(ciphers) != 1 || ciphers[0] != tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 {
+				t.Errorf("parseProfile() ciphers = %v, want only TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 (banned cipher %q must be dropped)", ciphers, name)
 			}
 		})
 	}

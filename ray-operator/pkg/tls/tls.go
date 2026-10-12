@@ -30,10 +30,16 @@ var log = ctrl.Log.WithName("tls")
 // Go crypto/tls cipher suite ID that implements them.
 //
 // Entries are included only when Go's crypto/tls package actually
-// implements the cipher. Suites with no Go implementation at all (notably
+// implements the cipher, AND the cipher is not a banned primitive (see
+// isBannedCipherName). Suites with no Go implementation at all (notably
 // every DHE_* key-exchange suite, and a handful of RSA/ECDHE CBC variants
-// Go never added) are intentionally omitted; resolveCipherNames drops and
-// logs them as unsupported rather than silently matching the wrong ID.
+// Go never added), and CBC/3DES suites Go does implement but this operator
+// refuses to negotiate, are intentionally omitted; resolveCipherNames
+// drops and logs them as unsupported rather than silently matching the
+// wrong ID. OpenShift's built-in "Old" TLS profile
+// (configv1.TLSProfiles[TLSProfileOldType]) lists several CBC and 3DES
+// suites that are therefore never resolved, even when that profile is
+// requested -- this operator refuses to negotiate them under any profile.
 var openSSLToGoCipher = map[string]uint16{
 	"ECDHE-ECDSA-AES128-GCM-SHA256":        tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
 	"ECDHE-RSA-AES128-GCM-SHA256":          tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
@@ -43,22 +49,8 @@ var openSSLToGoCipher = map[string]uint16{
 	"ECDHE-RSA-CHACHA20-POLY1305-SHA256":   tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
 	"ECDHE-ECDSA-CHACHA20-POLY1305":        tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
 	"ECDHE-RSA-CHACHA20-POLY1305":          tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
-
-	// Additional aliases needed to resolve OpenShift's built-in "Old" TLS
-	// profile (configv1.TLSProfiles[TLSProfileOldType]) against the actual
-	// set of suites Go's crypto/tls implements.
-	"ECDHE-ECDSA-AES128-SHA256": tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,
-	"ECDHE-RSA-AES128-SHA256":   tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256,
-	"ECDHE-ECDSA-AES128-SHA":    tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA,
-	"ECDHE-RSA-AES128-SHA":      tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
-	"ECDHE-ECDSA-AES256-SHA":    tls.TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA,
-	"ECDHE-RSA-AES256-SHA":      tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
-	"AES128-GCM-SHA256":         tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
-	"AES256-GCM-SHA384":         tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
-	"AES128-SHA256":             tls.TLS_RSA_WITH_AES_128_CBC_SHA256,
-	"AES128-SHA":                tls.TLS_RSA_WITH_AES_128_CBC_SHA,
-	"AES256-SHA":                tls.TLS_RSA_WITH_AES_256_CBC_SHA,
-	"DES-CBC3-SHA":              tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
+	"AES128-GCM-SHA256":                    tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
+	"AES256-GCM-SHA384":                    tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
 }
 
 // intermediateCiphers is the hardened cipher suite list used for the
@@ -83,20 +75,27 @@ var tlsVersionMap = map[configv1.TLSProtocolVersion]uint16{
 }
 
 // implementedCipherSuites returns every TLS <=1.2 cipher suite ID (and its
-// IANA name) implemented by the Go crypto/tls package running this binary,
-// covering both the secure suites returned by tls.CipherSuites() and the
-// insecure suites returned by tls.InsecureCipherSuites(). TLS 1.3-only
-// suites (e.g. TLS_AES_128_GCM_SHA256) are deliberately excluded: Go's
-// tls.Config.CipherSuites only governs TLS <=1.2 negotiation, so a TLS
-// 1.3-only ID would be meaningless clutter in that list. It is used to
-// filter requested TLS profiles down to ciphers this binary can actually
-// negotiate, rather than trusting a static, potentially stale map alone.
+// IANA name) implemented by the Go crypto/tls package running this binary
+// that this operator is willing to negotiate, covering both the secure
+// suites returned by tls.CipherSuites() and the insecure suites returned
+// by tls.InsecureCipherSuites(), minus anything isBannedCipherName rejects.
+//
+// TLS 1.3-only suites (e.g. TLS_AES_128_GCM_SHA256) are also excluded:
+// Go's tls.Config.CipherSuites only governs TLS <=1.2 negotiation, so a
+// TLS 1.3-only ID would be meaningless clutter in that list.
+//
+// It is used to filter requested TLS profiles -- named OR Custom -- down
+// to ciphers this binary can actually, and is willing to, negotiate,
+// rather than trusting a static, potentially stale map alone.
 func implementedCipherSuites() (byID map[uint16]struct{}, byName map[string]uint16) {
 	byID = make(map[uint16]struct{})
 	byName = make(map[string]uint16)
 	for _, group := range [][]*tls.CipherSuite{tls.CipherSuites(), tls.InsecureCipherSuites()} {
 		for _, c := range group {
 			if !supportsTLS12OrEarlier(c) {
+				continue
+			}
+			if isBannedCipherName(c.Name) {
 				continue
 			}
 			byID[c.ID] = struct{}{}
@@ -111,6 +110,28 @@ func implementedCipherSuites() (byID map[uint16]struct{}, byName map[string]uint
 func supportsTLS12OrEarlier(c *tls.CipherSuite) bool {
 	for _, v := range c.SupportedVersions {
 		if v <= tls.VersionTLS12 {
+			return true
+		}
+	}
+	return false
+}
+
+// isBannedCipherName reports whether a cipher suite's IANA name uses a
+// cryptographic primitive this operator refuses to negotiate under any TLS
+// profile -- including a cluster's "Old" named profile or an operator's
+// own Custom profile -- regardless of what that profile's data requests:
+//
+//   - CBC-mode suites: vulnerable to padding-oracle attacks (e.g. Lucky13).
+//   - 3DES: vulnerable to birthday/collision attacks (Sweet32, CWE-327).
+//   - RC4: a broken stream cipher with practical plaintext-recovery attacks.
+//
+// This is checked by substring on the suite's IANA name rather than via a
+// hardcoded ID list, so it also closes off these primitives when reached
+// through a raw IANA cipher name in a Custom profile, not just through the
+// openSSLToGoCipher alias table.
+func isBannedCipherName(name string) bool {
+	for _, banned := range []string{"_CBC_", "_3DES_", "_RC4_"} {
+		if strings.Contains(name, banned) {
 			return true
 		}
 	}
