@@ -382,7 +382,7 @@ func main() {
 		"unable to create controller", "controller", "RayJob")
 
 	if features.Enabled(features.RayClusterNetworkPolicy) {
-		networkPolicyController, err := ray.NewNetworkPolicyController(mgr)
+		networkPolicyController, err := ray.NewNetworkPolicyController(mgr, isOpenShift)
 		exitOnError(err, "unable to create controller", "controller", "NetworkPolicy")
 		exitOnError(networkPolicyController.SetupWithManager(mgr, config.ReconcileConcurrency),
 			"unable to create controller", "controller", "NetworkPolicy")

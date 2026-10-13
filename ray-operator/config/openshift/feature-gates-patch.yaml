@@ -1,0 +1,12 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kuberay-operator
+spec:
+  template:
+    spec:
+      containers:
+      - name: kuberay-operator
+        args:
+        - --metrics-cert-path=/etc/metrics-certs
+        - --feature-gates=RayClusterStatusConditions=true,RayClusterNetworkPolicy=true,RayClusterMTLS=true
