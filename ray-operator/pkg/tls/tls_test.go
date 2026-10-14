@@ -318,6 +318,7 @@ func TestResolve(t *testing.T) {
 		wantProfileFetched bool
 		wantMinVersion     uint16
 		wantNilCiphers     bool
+		wantCiphers        []uint16
 	}{
 		{
 			name:               "APIServer not found falls back to Intermediate",
@@ -341,6 +342,10 @@ func TestResolve(t *testing.T) {
 			wantNilCiphers:     true,
 		},
 		{
+			// Mirrors TestParseProfile's "Old resolves to TLS 1.0 with
+			// explicit, runtime-supported, non-banned suites" case, but
+			// asserts the suites actually land on a tls.Config once TLSOpts
+			// is applied, not just the parseProfile() return value.
 			name: "APIServer with Old profile resolves to explicit, runtime-supported suites",
 			objects: []runtime.Object{
 				&configv1.APIServer{
@@ -354,8 +359,21 @@ func TestResolve(t *testing.T) {
 			},
 			wantProfileFetched: true,
 			wantMinVersion:     tls.VersionTLS10,
+			wantCiphers: []uint16{
+				tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+				tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+				tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
+			},
 		},
 		{
+			// Asserts the applied tls.Config, not just parseProfile()'s
+			// return value, ends up with exactly the one requested OpenSSL
+			// alias resolved to its Go cipher suite ID.
 			name: "APIServer with Custom profile using supported OpenSSL aliases",
 			objects: []runtime.Object{
 				&configv1.APIServer{
@@ -375,6 +393,7 @@ func TestResolve(t *testing.T) {
 			},
 			wantProfileFetched: true,
 			wantMinVersion:     tls.VersionTLS12,
+			wantCiphers:        []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
 		},
 		{
 			name: "APIServer with malformed Custom profile (unknown minTLSVersion) is a fatal error",
@@ -454,6 +473,18 @@ func TestResolve(t *testing.T) {
 			}
 			if tt.wantNilCiphers && cfg.CipherSuites != nil {
 				t.Errorf("CipherSuites should be nil for TLS 1.3, got %v", cfg.CipherSuites)
+			}
+			if tt.wantCiphers != nil {
+				if len(cfg.CipherSuites) != len(tt.wantCiphers) {
+					t.Errorf("CipherSuites = %v, want %v", cfg.CipherSuites, tt.wantCiphers)
+				} else {
+					for i, c := range cfg.CipherSuites {
+						if c != tt.wantCiphers[i] {
+							t.Errorf("CipherSuites = %v, want %v", cfg.CipherSuites, tt.wantCiphers)
+							break
+						}
+					}
+				}
 			}
 		})
 	}
