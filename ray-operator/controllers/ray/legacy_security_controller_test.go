@@ -4,7 +4,10 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -25,6 +28,25 @@ func legacySecurityScheme(t *testing.T) *runtime.Scheme {
 	return scheme
 }
 
+func TestLegacySecurityControllerAnnotationValues(t *testing.T) {
+	features.SetFeatureGateDuringTest(t, features.RayClusterMTLS, true)
+	features.SetFeatureGateDuringTest(t, features.RayClusterNetworkPolicy, true)
+	for _, value := range []string{"true", "True", "TRUE", "1", "yes", "Yes", "YES", "on", "On", "ON"} {
+		t.Run(value, func(t *testing.T) {
+			cluster := legacySecurityCluster("legacy", map[string]string{utils.EnableSecureTrustedNetworkAnnotationKey: value})
+			c := fake.NewClientBuilder().WithScheme(legacySecurityScheme(t)).WithObjects(cluster).Build()
+			r := &LegacySecurityController{Client: c, isOpenShift: true}
+			_, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
+			require.NoError(t, err)
+			got := &rayv1.RayCluster{}
+			require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(cluster), got))
+			require.NotNil(t, got.Spec.NetworkPolicy, "all legacy enabled values must migrate")
+			require.NotNil(t, got.Spec.TLSOptions)
+			require.True(t, *got.Spec.TLSOptions.Enabled)
+		})
+	}
+}
+
 func legacySecurityCluster(name string, annotations map[string]string) *rayv1.RayCluster {
 	return &rayv1.RayCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Annotations: annotations},
@@ -37,6 +59,7 @@ func legacySecurityCluster(name string, annotations map[string]string) *rayv1.Ra
 func TestLegacySecurityControllerMigratesLegacyAnnotation(t *testing.T) {
 	features.SetFeatureGateDuringTest(t, features.RayClusterMTLS, true)
 	features.SetFeatureGateDuringTest(t, features.RayClusterNetworkPolicy, true)
+	t.Setenv("MONITORING_NAMESPACE", "openshift-user-workload-monitoring")
 	cluster := legacySecurityCluster("legacy", map[string]string{
 		utils.EnableSecureTrustedNetworkAnnotationKey: "true",
 	})
@@ -104,5 +127,35 @@ func TestLegacySecurityControllerIgnoresClustersWithoutLegacyAnnotation(t *testi
 	}
 	if got.Spec.TLSOptions != nil || got.Spec.NetworkPolicy != nil {
 		t.Fatalf("unannotated cluster was changed: %#v", got.Spec)
+	}
+}
+
+func TestLegacySecurityControllerSkipsIneligibleClusters(t *testing.T) {
+	for _, scenario := range []string{"mTLS disabled", "NetworkPolicy disabled", "annotation disabled", "deleting", "externally managed"} {
+		t.Run(scenario, func(t *testing.T) {
+			features.SetFeatureGateDuringTest(t, features.RayClusterMTLS, scenario != "mTLS disabled")
+			features.SetFeatureGateDuringTest(t, features.RayClusterNetworkPolicy, scenario != "NetworkPolicy disabled")
+			cluster := legacySecurityCluster("legacy", map[string]string{utils.EnableSecureTrustedNetworkAnnotationKey: "true"})
+			switch scenario {
+			case "annotation disabled":
+				cluster.Annotations[utils.EnableSecureTrustedNetworkAnnotationKey] = "false"
+			case "deleting":
+				now := metav1.NewTime(time.Now())
+				cluster.DeletionTimestamp = &now
+				cluster.Finalizers = []string{"test.example.com/hold"}
+			case "externally managed":
+				cluster.Spec.ManagedBy = new("kueue.x-k8s.io/multikueue")
+			}
+			want := cluster.DeepCopy()
+			c := fake.NewClientBuilder().WithScheme(legacySecurityScheme(t)).WithObjects(cluster).Build()
+			r := &LegacySecurityController{Client: c, isOpenShift: true}
+			result, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
+			require.NoError(t, err)
+			assert.Zero(t, result.RequeueAfter)
+			got := &rayv1.RayCluster{}
+			require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(cluster), got))
+			assert.Equal(t, want.Spec, got.Spec)
+			assert.Equal(t, want.Annotations, got.Annotations)
+		})
 	}
 }

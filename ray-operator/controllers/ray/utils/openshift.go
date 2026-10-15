@@ -110,15 +110,24 @@ func ensureOpenShiftNetworkPolicy(spec *rayv1.RayClusterSpec) {
 		Ports: []networkingv1.NetworkPolicyPort{port(8265), port(10001)},
 	})
 	spec.NetworkPolicy.Head.IngressRules = appendIngress(spec.NetworkPolicy.Head.IngressRules, networkingv1.NetworkPolicyIngressRule{
+		From: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{
+			MatchLabels: map[string]string{
+				RayOriginatedFromCRDLabelKey: RayOriginatedFromCRDLabelValue(RayJobCRD),
+			},
+		}}},
+		Ports: []networkingv1.NetworkPolicyPort{port(8265)},
+	})
+	spec.NetworkPolicy.Head.IngressRules = appendIngress(spec.NetworkPolicy.Head.IngressRules, networkingv1.NetworkPolicyIngressRule{
 		Ports: []networkingv1.NetworkPolicyPort{port(8443)},
 	})
 	namespaces := []string{}
-	if namespace := os.Getenv("APPLICATION_NAMESPACE"); namespace != "" {
-		namespaces = append(namespaces, namespace)
+	appendNamespace := func(namespace string) {
+		if namespace != "" && !slices.Contains(namespaces, namespace) {
+			namespaces = append(namespaces, namespace)
+		}
 	}
-	if namespace := os.Getenv("POD_NAMESPACE"); namespace != "" {
-		namespaces = append(namespaces, namespace)
-	}
+	appendNamespace(os.Getenv("APPLICATION_NAMESPACE"))
+	appendNamespace(os.Getenv("POD_NAMESPACE"))
 	if len(namespaces) == 0 {
 		namespaces = []string{"redhat-ods-applications", "opendatahub"}
 	}
@@ -131,6 +140,16 @@ func ensureOpenShiftNetworkPolicy(spec *rayv1.RayClusterSpec) {
 	spec.NetworkPolicy.Head.IngressRules = appendIngress(spec.NetworkPolicy.Head.IngressRules, networkingv1.NetworkPolicyIngressRule{
 		From: []networkingv1.NetworkPolicyPeer{operatorPeer}, Ports: []networkingv1.NetworkPolicyPort{port(8265), port(10001)},
 	})
+	// Preserve the 1.6.2 monitoring contract. An unset namespace must not
+	// expose metrics to other namespaces.
+	if monitoringNamespace := os.Getenv("MONITORING_NAMESPACE"); monitoringNamespace != "" {
+		spec.NetworkPolicy.Head.IngressRules = appendIngress(spec.NetworkPolicy.Head.IngressRules, networkingv1.NetworkPolicyIngressRule{
+			From: []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{
+				Key: corev1.LabelMetadataName, Operator: metav1.LabelSelectorOpIn, Values: []string{monitoringNamespace},
+			}}}}},
+			Ports: []networkingv1.NetworkPolicyPort{port(8080)},
+		})
+	}
 	gatewayNamespace := os.Getenv("GATEWAY_NAMESPACE")
 	if gatewayNamespace == "" {
 		gatewayNamespace = "openshift-ingress"

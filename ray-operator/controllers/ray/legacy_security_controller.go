@@ -3,6 +3,7 @@ package ray
 import (
 	"context"
 	"reflect"
+	"time"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -13,6 +14,8 @@ import (
 	"github.com/ray-project/kuberay/ray-operator/controllers/ray/utils"
 	"github.com/ray-project/kuberay/ray-operator/pkg/features"
 )
+
+const legacySecurityMigrationRequeueInterval = 10 * time.Second
 
 // LegacySecurityController migrates the downstream OpenShift security annotation
 // to upstream RayCluster fields. Resource ownership remains with the native
@@ -34,17 +37,25 @@ func (r *LegacySecurityController) Reconcile(ctx context.Context, req reconcile.
 	}
 
 	if !r.isOpenShift || !features.Enabled(features.RayClusterMTLS) || !features.Enabled(features.RayClusterNetworkPolicy) ||
-		cluster.Annotations[utils.EnableSecureTrustedNetworkAnnotationKey] != "true" {
+		!utils.IsLegacySecurityEnabled(cluster) {
+		return reconcile.Result{}, nil
+	}
+	if !cluster.DeletionTimestamp.IsZero() || utils.ManagedByExternalController(cluster.Spec.ManagedBy) != nil {
 		return reconcile.Result{}, nil
 	}
 
 	before := cluster.DeepCopy()
 	utils.EnsureOpenShiftRayClusterSecurity(cluster)
-	if reflect.DeepEqual(before.Spec, cluster.Spec) {
+	if reflect.DeepEqual(before.Spec, cluster.Spec) && reflect.DeepEqual(before.Annotations, cluster.Annotations) {
 		return reconcile.Result{}, nil
 	}
 
-	return reconcile.Result{}, r.Patch(ctx, cluster, client.MergeFrom(before))
+	if err := r.Patch(ctx, cluster, client.MergeFrom(before)); err != nil {
+		return reconcile.Result{}, err
+	}
+	// An older CRD can silently prune native fields from a successful patch.
+	// Re-read on the next reconcile and retry until both fields are persisted.
+	return reconcile.Result{RequeueAfter: legacySecurityMigrationRequeueInterval}, nil
 }
 
 func (r *LegacySecurityController) SetupWithManager(mgr ctrl.Manager) error {

@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync" // DO NOT REMOVE FROM ODH FORK OF KUBERAY: this is only used to preserve legacy OpenShift NetworkPolicies during migration
+	"time" // DO NOT REMOVE FROM ODH FORK OF KUBERAY: this is only used to preserve legacy OpenShift NetworkPolicies during migration
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -26,26 +28,76 @@ import (
 
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 	"github.com/ray-project/kuberay/ray-operator/controllers/ray/utils"
+	"github.com/ray-project/kuberay/ray-operator/pkg/features" // DO NOT REMOVE FROM ODH FORK OF KUBERAY: this is only used to preserve legacy OpenShift NetworkPolicies during migration
 )
 
 // NetworkPolicyController is an independent controller that watches RayCluster
 // resources and manages NetworkPolicies for them.
 type NetworkPolicyController struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder events.EventRecorder
+	Scheme                 *runtime.Scheme
+	Recorder               events.EventRecorder
+	isOpenShift            bool                     // DO NOT REMOVE FROM ODH FORK OF KUBERAY: this is only used to preserve legacy OpenShift NetworkPolicies during migration
+	legacyMigrationMutex   sync.Mutex               // DO NOT REMOVE FROM ODH FORK OF KUBERAY: this is only used to preserve legacy OpenShift NetworkPolicies during migration
+	legacyMigrationRetries map[client.ObjectKey]int // DO NOT REMOVE FROM ODH FORK OF KUBERAY: this is only used to preserve legacy OpenShift NetworkPolicies during migration
 }
 
-func NewNetworkPolicyController(mgr manager.Manager) (*NetworkPolicyController, error) {
+// DO NOT REMOVE FROM ODH FORK OF KUBERAY: this is only used to preserve legacy OpenShift NetworkPolicies during migration
+const (
+	legacyNetworkPolicyMigrationRequeueInterval = 10 * time.Second
+	legacyNetworkPolicyMigrationMaxRetries      = 6
+	legacyNetworkPolicyMigrationRetryInterval   = time.Minute
+)
+
+// DO NOT REMOVE FROM ODH FORK OF KUBERAY: this is only used to preserve legacy OpenShift NetworkPolicies during migration
+func NewNetworkPolicyController(mgr manager.Manager, openShift ...bool) (*NetworkPolicyController, error) {
+	isOpenShift := false
+	if len(openShift) > 0 {
+		isOpenShift = openShift[0]
+	}
 	return &NetworkPolicyController{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("networkpolicy-controller"),
+		Client:                 mgr.GetClient(),
+		Scheme:                 mgr.GetScheme(),
+		Recorder:               mgr.GetEventRecorder("networkpolicy-controller"),
+		isOpenShift:            isOpenShift, // DO NOT REMOVE FROM ODH FORK OF KUBERAY: this is only used to preserve legacy OpenShift NetworkPolicies during migration
+		legacyMigrationRetries: make(map[client.ObjectKey]int),
 	}, nil
+}
+
+// DO NOT REMOVE FROM ODH FORK OF KUBERAY: this is only used to preserve legacy OpenShift NetworkPolicies during migration
+func (r *NetworkPolicyController) shouldRequeueLegacyMigration(key client.ObjectKey) (requeue, warn bool) {
+	r.legacyMigrationMutex.Lock()
+	defer r.legacyMigrationMutex.Unlock()
+
+	if r.legacyMigrationRetries == nil {
+		r.legacyMigrationRetries = make(map[client.ObjectKey]int)
+	}
+
+	retries := r.legacyMigrationRetries[key]
+	if retries >= legacyNetworkPolicyMigrationMaxRetries {
+		// Emit the warning once per migration retry sequence, while continuing
+		// the slower retries for as long as migration remains incomplete.
+		if retries == legacyNetworkPolicyMigrationMaxRetries {
+			r.legacyMigrationRetries[key] = retries + 1
+			return false, true
+		}
+		return false, false
+	}
+	r.legacyMigrationRetries[key] = retries + 1
+	return true, false
+}
+
+// DO NOT REMOVE FROM ODH FORK OF KUBERAY: this is only used to preserve legacy OpenShift NetworkPolicies during migration
+func (r *NetworkPolicyController) resetLegacyMigration(key client.ObjectKey) {
+	r.legacyMigrationMutex.Lock()
+	defer r.legacyMigrationMutex.Unlock()
+
+	delete(r.legacyMigrationRetries, key)
 }
 
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=ray.io,resources=rayclusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 
 func (r *NetworkPolicyController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := ctrl.LoggerFrom(ctx)
@@ -53,6 +105,7 @@ func (r *NetworkPolicyController) Reconcile(ctx context.Context, req ctrl.Reques
 	instance := &rayv1.RayCluster{}
 	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
 		if errors.IsNotFound(err) {
+			r.resetLegacyMigration(req.NamespacedName) // DO NOT REMOVE FROM ODH FORK OF KUBERAY: this is only used to preserve legacy OpenShift NetworkPolicies during migration
 			// RayCluster was deleted - NetworkPolicies will be garbage collected automatically
 			return ctrl.Result{}, nil
 		}
@@ -60,19 +113,43 @@ func (r *NetworkPolicyController) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	if instance.DeletionTimestamp != nil {
+		r.resetLegacyMigration(req.NamespacedName)
 		return ctrl.Result{}, nil
 	}
 
 	if manager := utils.ManagedByExternalController(instance.Spec.ManagedBy); manager != nil {
+		r.resetLegacyMigration(req.NamespacedName)
 		logger.Info("Skipping RayCluster managed by a custom controller", "managed-by", manager)
 		return ctrl.Result{}, nil
 	}
 
 	if instance.Spec.NetworkPolicy == nil {
+		// DO NOT REMOVE FROM ODH FORK OF KUBERAY: this is only used to preserve legacy OpenShift NetworkPolicies during migration
+		if r.isOpenShift && features.Enabled(features.RayClusterNetworkPolicy) &&
+			utils.IsLegacySecurityEnabled(instance) {
+			requeue, warn := r.shouldRequeueLegacyMigration(req.NamespacedName)
+			if requeue {
+				logger.Info("NetworkPolicy migration pending for legacy OpenShift RayCluster; preserving existing policies", "cluster", instance.Name, "namespace", instance.Namespace)
+				return ctrl.Result{RequeueAfter: legacyNetworkPolicyMigrationRequeueInterval}, nil
+			}
+			// Keep the legacy policies indefinitely if the migration has not completed.
+			// Deleting them after the retry window would leave the cluster without
+			// network isolation when the legacy-security controller is delayed or
+			// unavailable.
+			if warn {
+				logger.Info("NetworkPolicy migration grace period expired for legacy OpenShift RayCluster; preserving existing policies", "cluster", instance.Name, "namespace", instance.Namespace)
+				r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "LegacySecurityMigrationPending", string(utils.ReconcileAction),
+					"Legacy security migration has not completed; existing NetworkPolicies are preserved. Check the CRDs and legacy-security controller")
+			}
+			return ctrl.Result{RequeueAfter: legacyNetworkPolicyMigrationRetryInterval}, nil
+		}
+		r.resetLegacyMigration(req.NamespacedName) // OPENSHIFT SPECIFIC
 		logger.V(1).Info("NetworkPolicy not configured for RayCluster", "cluster", instance.Name, "namespace", instance.Namespace)
 		// If NetworkPolicies exist but NetworkPolicy config is removed, clean them up
-		return ctrl.Result{}, r.deleteStaleNetworkPolicies(ctx, instance, nil)
+		_, err := r.deleteStaleNetworkPolicies(ctx, instance, nil)
+		return ctrl.Result{}, err
 	}
+	r.resetLegacyMigration(req.NamespacedName) // OPENSHIFT SPECIFIC
 
 	logger.Info("Reconciling NetworkPolicies for RayCluster", "cluster", instance.Name, "namespace", instance.Namespace)
 
@@ -96,15 +173,14 @@ func (r *NetworkPolicyController) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 	}
 
-	// Remove policies for worker groups that were removed from the spec.
-	//
-	// NOTE(machichima): with the default UpgradeStrategy (None), the RayCluster controller does
-	// not delete pods of a worker group removed from WorkerGroupSpecs. Those orphaned
-	// pods keep running but lose their per-group NetworkPolicy once it is deleted
-	// here, so they are no longer isolated. To remove a worker group safely, use
-	// UpgradeStrategy: Recreate so the old pods are removed along with their policy.
-	if err := r.deleteStaleNetworkPolicies(ctx, instance, desiredNames); err != nil {
+	// Keep stale policies while they are the only isolation for live pods from
+	// removed worker groups. UpgradeStrategy None can leave those pods running.
+	retained, err := r.deleteStaleNetworkPolicies(ctx, instance, desiredNames)
+	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if retained {
+		return ctrl.Result{RequeueAfter: legacyNetworkPolicyMigrationRetryInterval}, nil
 	}
 
 	logger.Info("Successfully reconciled NetworkPolicies for RayCluster", "cluster", instance.Name, "namespace", instance.Namespace)
@@ -420,13 +496,14 @@ func normalizeNetworkPolicyPorts(spec *networkingv1.NetworkPolicySpec) {
 
 // deleteStaleNetworkPolicies deletes NetworkPolicies owned by this RayCluster whose
 // names are not in desiredNames.
-func (r *NetworkPolicyController) deleteStaleNetworkPolicies(ctx context.Context, instance *rayv1.RayCluster, desiredNames map[string]bool) error {
+func (r *NetworkPolicyController) deleteStaleNetworkPolicies(ctx context.Context, instance *rayv1.RayCluster, desiredNames map[string]bool) (bool, error) {
 	logger := ctrl.LoggerFrom(ctx)
+	retained := false
 
 	networkPolicies := &networkingv1.NetworkPolicyList{}
 	if err := r.List(ctx, networkPolicies, client.InNamespace(instance.Namespace),
 		client.MatchingLabels{utils.RayClusterLabelKey: instance.Name}); err != nil {
-		return err
+		return retained, err
 	}
 
 	for i := range networkPolicies.Items {
@@ -438,6 +515,40 @@ func (r *NetworkPolicyController) deleteStaleNetworkPolicies(ctx context.Context
 			logger.V(1).Info("NetworkPolicy exists but is not owned by this RayCluster, skipping deletion", "name", networkPolicy.Name)
 			continue
 		}
+		// A nil desired set means the user explicitly disabled NetworkPolicy;
+		// only apply the isolation guard during migration or group removal.
+		if desiredNames != nil {
+			selector, err := metav1.LabelSelectorAsSelector(&networkPolicy.Spec.PodSelector)
+			if err != nil {
+				return retained, err
+			}
+			pods := &corev1.PodList{}
+			if err := r.List(ctx, pods, client.InNamespace(instance.Namespace), client.MatchingLabelsSelector{Selector: selector}); err != nil {
+				return retained, err
+			}
+			uncovered := false
+			for _, pod := range pods.Items {
+				if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+					continue
+				}
+				name := ""
+				switch rayv1.RayNodeType(pod.Labels[utils.RayNodeTypeLabelKey]) {
+				case rayv1.HeadNode:
+					name = headNetworkPolicyName(instance.Name)
+				case rayv1.WorkerNode:
+					name = workerGroupNetworkPolicyName(instance.Name, pod.Labels[utils.RayNodeGroupLabelKey])
+				}
+				if !desiredNames[name] {
+					uncovered = true
+					break
+				}
+			}
+			if uncovered {
+				retained = true
+				logger.Info("Preserving stale NetworkPolicy while live pods still require it", "name", networkPolicy.Name)
+				continue
+			}
+		}
 		if err := r.Delete(ctx, networkPolicy); err != nil {
 			if errors.IsNotFound(err) {
 				continue
@@ -445,14 +556,14 @@ func (r *NetworkPolicyController) deleteStaleNetworkPolicies(ctx context.Context
 			logger.Error(err, "Failed to delete NetworkPolicy", "name", networkPolicy.Name)
 			r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, string(utils.FailedToDeleteNetworkPolicy), string(utils.DeleteAction),
 				"Failed to delete NetworkPolicy %s/%s: %v", instance.Namespace, networkPolicy.Name, err)
-			return err
+			return retained, err
 		}
 		logger.Info("Deleted NetworkPolicy", "name", networkPolicy.Name)
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, string(utils.DeletedNetworkPolicy), string(utils.DeleteAction),
 			"Deleted NetworkPolicy %s/%s", instance.Namespace, networkPolicy.Name)
 	}
 
-	return nil
+	return retained, nil
 }
 
 func (r *NetworkPolicyController) SetupWithManager(mgr ctrl.Manager, reconcileConcurrency int) error {

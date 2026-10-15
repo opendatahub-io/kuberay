@@ -158,7 +158,7 @@ var _ = Context("NetworkPolicy Controller Integration Tests", func() {
 			Expect(headNetworkPolicy.Spec.PodSelector).To(Equal(expectedPodSelector))
 
 			// Verify ingress rules: intra-cluster plus the OpenShift security rules.
-			Expect(headNetworkPolicy.Spec.Ingress).To(HaveLen(5))
+			Expect(headNetworkPolicy.Spec.Ingress).To(HaveLen(6))
 
 			// Verify Rule 1: Intra-cluster communication - NO PORTS (allows all)
 			intraClusterRule := headNetworkPolicy.Spec.Ingress[0]
@@ -185,8 +185,21 @@ var _ = Context("NetworkPolicy Controller Integration Tests", func() {
 			}
 			Expect(externalRule.From[0]).To(Equal(expectedAnyPodPeer))
 
+			// Verify RayJob submitter access on the dashboard port.
+			rayJobRule := headNetworkPolicy.Spec.Ingress[2]
+			expectedRayJobPeer := networkingv1.NetworkPolicyPeer{
+				PodSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{
+						utils.RayOriginatedFromCRDLabelKey: utils.RayOriginatedFromCRDLabelValue(utils.RayJobCRD),
+					},
+				},
+			}
+			Expect(rayJobRule.From).To(Equal([]networkingv1.NetworkPolicyPeer{expectedRayJobPeer}))
+			Expect(rayJobRule.Ports).To(HaveLen(1))
+			Expect(rayJobRule.Ports[0].Port.IntVal).To(Equal(int32(8265)))
+
 			// Verify the secured port rule: NO FROM (allows all).
-			securedRule := headNetworkPolicy.Spec.Ingress[2]
+			securedRule := headNetworkPolicy.Spec.Ingress[3]
 			Expect(securedRule.From).To(BeEmpty(), "Secured ports rule should have NO from (allows all)")
 			Expect(securedRule.Ports).To(HaveLen(1), "Secured ports rule should have 1 port (8443 only)")
 
