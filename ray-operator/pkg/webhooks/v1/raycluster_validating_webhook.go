@@ -49,6 +49,11 @@ func (w *RayClusterWebhook) ValidateDelete(_ context.Context, _ *rayv1.RayCluste
 func (w *RayClusterWebhook) validateRayCluster(rayCluster *rayv1.RayCluster) error {
 	var allErrs field.ErrorList
 
+	// TODO(ODH NetworkPolicy): Define whether explicitly supplied managed
+	// spec.networkPolicy rules are platform-owned and must be validated here.
+	// Until the caller/source contract is finalized, preserve explicit native
+	// policy configurations rather than rejecting valid KubeRay use cases.
+
 	if err := utils.ValidateRayClusterMetadata(rayCluster.ObjectMeta); err != nil {
 		allErrs = append(allErrs, field.Invalid(field.NewPath("metadata").Child("name"), rayCluster.Name, err.Error()))
 	}
