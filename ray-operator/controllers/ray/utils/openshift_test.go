@@ -59,6 +59,57 @@ func TestOpenShiftMonitoringPreservesExplicitPolicy(t *testing.T) {
 	assert.Equal(t, want, cluster.Spec.NetworkPolicy, "explicit policies must not acquire platform default rules")
 }
 
+func TestOpenShiftNetworkPolicyUsesEffectiveRayPorts(t *testing.T) {
+	t.Setenv("MONITORING_NAMESPACE", "monitoring")
+	cluster := &rayv1.RayCluster{
+		Spec: rayv1.RayClusterSpec{
+			HeadGroupSpec: rayv1.HeadGroupSpec{
+				RayStartParams: map[string]string{
+					"dashboard-port":      "9365",
+					"metrics-export-port": "9090",
+				},
+			},
+		},
+	}
+
+	EnsureOpenShiftRayClusterSecurity(cluster)
+	rules := cluster.Spec.NetworkPolicy.Head.IngressRules
+
+	assert.Contains(t, rulePorts(rules[0]), int32(9365), "dashboard access should use the configured dashboard port")
+	assert.Contains(t, rulePorts(rules[0]), int32(DefaultClientPort), "client access should retain the client port")
+	assert.Contains(t, rulePorts(rules[1]), int32(9365), "RayJob submission should use the configured dashboard port")
+	assert.Contains(t, rulePorts(rules[4]), int32(9090), "monitoring should use the configured metrics port")
+}
+
+func TestOpenShiftNetworkPolicyInvalidRayPortsUseDefaults(t *testing.T) {
+	cluster := &rayv1.RayCluster{
+		Spec: rayv1.RayClusterSpec{
+			HeadGroupSpec: rayv1.HeadGroupSpec{
+				RayStartParams: map[string]string{
+					"dashboard-port":      "not-a-port",
+					"metrics-export-port": "70000",
+				},
+			},
+		},
+	}
+
+	EnsureOpenShiftRayClusterSecurity(cluster)
+	rules := cluster.Spec.NetworkPolicy.Head.IngressRules
+
+	assert.Contains(t, rulePorts(rules[0]), int32(DefaultDashboardPort))
+	assert.Contains(t, rulePorts(rules[1]), int32(DefaultDashboardPort))
+}
+
+func rulePorts(rule networkingv1.NetworkPolicyIngressRule) []int32 {
+	ports := make([]int32, 0, len(rule.Ports))
+	for _, port := range rule.Ports {
+		if port.Port != nil && port.Port.Type == intstr.Int {
+			ports = append(ports, port.Port.IntVal)
+		}
+	}
+	return ports
+}
+
 func TestLegacySecurityAnnotationParser(t *testing.T) {
 	assert.False(t, IsLegacySecurityEnabled(nil))
 	for _, value := range []string{"", "false", "0", "no", "off", " true ", "enabled"} {
