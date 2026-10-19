@@ -44,6 +44,8 @@ resources:
 commonLabels:
   app.kubernetes.io/name: kuberay
   app.kubernetes.io/component: kuberay-operator
+  app.kubernetes.io/part-of: ray
+  app.opendatahub.io/ray: "true"
 
 patches:
 - path: webhook-deployment-patch.yaml

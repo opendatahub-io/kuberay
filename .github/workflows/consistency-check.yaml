@@ -160,3 +160,7 @@ jobs:
       - name: Check rbac configuration
         run: |
           pytest -s scripts/rbac_test.py
+
+      - name: Check OpenShift Deployment selector compatibility
+        run: |
+          pytest -s scripts/openshift_kustomize_test.py
