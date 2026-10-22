@@ -19,9 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	"k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -285,7 +283,6 @@ func main() {
 	restConfig.UserAgent = userAgent
 	restConfig.QPS = float32(*config.QPS)
 	restConfig.Burst = *config.Burst
-	certManagerAvailable := certManagerAPIAvailable(restConfig)
 
 	// Fetch the cluster TLS security profile for metrics server (OpenShift only).
 	// Resolve() has its own 10s timeout internally.
@@ -363,19 +360,19 @@ func main() {
 		DefaultContainerEnvs:     config.DefaultContainerEnvs,
 		DefaultPodAnnotations:    config.DefaultPodAnnotations,
 		DefaultPodLabels:         config.DefaultPodLabels,
-		CertManagerAvailable:     certManagerAvailable,
 		OIDCProxyTLSArgs:         proxyTLSArgs,
 	}
 	exitOnError(ray.NewReconciler(mgr, rayClusterOptions).SetupWithManager(mgr, config.ReconcileConcurrency),
 		"unable to create controller", "controller", "RayCluster")
 
 	if features.Enabled(features.RayClusterMTLS) {
-		if certManagerAvailable {
-			exitOnError(ray.NewRayClusterMTLSController(mgr).SetupWithManager(mgr),
-				"unable to create controller", "controller", "RayClusterMTLS")
-		} else {
-			setupLog.Info("cert-manager API not found; mTLS controller disabled (RayClusters with tlsOptions and no CertificateSecretName will not get auto-generated certs)")
-		}
+		// ODH/RHOAI carry: the OpenShift overlay enables RayClusterMTLS, but
+		// cert-manager may become ready after KubeRay starts. Keep the mTLS
+		// controller registered so it can recover from that startup ordering;
+		// do not replace this with a one-time cert-manager discovery check.
+		exitOnError(ray.NewRayClusterMTLSController(mgr).SetupWithManager(mgr),
+			"unable to create controller", "controller", "RayClusterMTLS")
+		setupLog.Info("RayClusterMTLS feature gate is enabled, starting mTLS controller")
 	} else {
 		setupLog.Info("RayClusterMTLS feature gate is disabled, skipping mTLS controller setup")
 	}
@@ -438,26 +435,6 @@ func main() {
 		exitOnError(err, "problem running manager")
 	}
 	cancel()
-}
-
-// certManagerAPIAvailable returns true if the cert-manager.io/v1 API (Certificate, Issuer) is
-// available in the cluster. Used to avoid registering the mTLS controller when cert-manager
-// is not installed, which would cause manager startup to time out waiting for the Certificate cache to sync.
-func certManagerAPIAvailable(restConfig *rest.Config) bool {
-	discoveryClient, err := discovery.NewDiscoveryClientForConfig(restConfig)
-	if err != nil || discoveryClient == nil {
-		return false
-	}
-	_, resources, err := discoveryClient.ServerGroupsAndResources()
-	if err != nil {
-		return false
-	}
-	for _, r := range resources {
-		if r.GroupVersion == "cert-manager.io/v1" {
-			return true
-		}
-	}
-	return false
 }
 
 func exitOnError(err error, msg string, keysAndValues ...any) {

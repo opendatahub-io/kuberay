@@ -37,16 +37,21 @@ const (
 // creation happens independently of pod lifecycle, avoiding the SAN race condition.
 type RayClusterMTLSController struct {
 	client.Client
-	Scheme   *k8sruntime.Scheme
-	Recorder events.EventRecorder
+	// ODH/RHOAI carry: use direct API reads for cert-manager resources because
+	// the OpenShift deployment may install cert-manager after KubeRay. Do not
+	// remove this reader or change these reads back to the startup cache.
+	APIReader client.Reader
+	Scheme    *k8sruntime.Scheme
+	Recorder  events.EventRecorder
 }
 
 // NewRayClusterMTLSController creates a new mTLS controller instance.
 func NewRayClusterMTLSController(mgr ctrl.Manager) *RayClusterMTLSController {
 	return &RayClusterMTLSController{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("raycluster-mtls-controller"),
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorder("raycluster-mtls-controller"),
 	}
 }
 
@@ -143,7 +148,7 @@ func (r *RayClusterMTLSController) handleAutoGenerate(ctx context.Context, insta
 // the next reconcile will retry.
 func (r *RayClusterMTLSController) ensureSecretOwnedByCertificate(ctx context.Context, cert *certmanagerv1.Certificate) error {
 	secret := &corev1.Secret{}
-	if err := r.Get(ctx, client.ObjectKey{Name: cert.Spec.SecretName, Namespace: cert.Namespace}, secret); err != nil {
+	if err := r.getAPI(ctx, client.ObjectKey{Name: cert.Spec.SecretName, Namespace: cert.Namespace}, secret); err != nil {
 		if errors.IsNotFound(err) {
 			return nil
 		}
@@ -166,7 +171,7 @@ func (r *RayClusterMTLSController) reconcileIssuer(
 	issuerConfig certmanagerv1.IssuerConfig,
 ) error {
 	existing := &certmanagerv1.Issuer{}
-	err := r.Get(ctx, client.ObjectKey{Name: issuerName, Namespace: instance.Namespace}, existing)
+	err := r.getAPI(ctx, client.ObjectKey{Name: issuerName, Namespace: instance.Namespace}, existing)
 	if err == nil {
 		return nil
 	}
@@ -212,7 +217,7 @@ func (r *RayClusterMTLSController) reconcileCACertificate(ctx context.Context, i
 	caSecretName := utils.GetCASecretName(instance.Name, instance.UID)
 
 	existing := &certmanagerv1.Certificate{}
-	err := r.Get(ctx, client.ObjectKey{Name: certName, Namespace: instance.Namespace}, existing)
+	err := r.getAPI(ctx, client.ObjectKey{Name: certName, Namespace: instance.Namespace}, existing)
 	if err != nil {
 		if !errors.IsNotFound(err) {
 			return err
@@ -313,7 +318,7 @@ func (r *RayClusterMTLSController) reconcileHeadCertificate(ctx context.Context,
 	}
 
 	existing := &certmanagerv1.Certificate{}
-	err = r.Get(ctx, client.ObjectKey{Name: certName, Namespace: instance.Namespace}, existing)
+	err = r.getAPI(ctx, client.ObjectKey{Name: certName, Namespace: instance.Namespace}, existing)
 	if err != nil {
 		if !errors.IsNotFound(err) {
 			return err
@@ -384,7 +389,7 @@ func (r *RayClusterMTLSController) reconcileWorkerCertificate(ctx context.Contex
 	}
 
 	existing := &certmanagerv1.Certificate{}
-	err = r.Get(ctx, client.ObjectKey{Name: certName, Namespace: instance.Namespace}, existing)
+	err = r.getAPI(ctx, client.ObjectKey{Name: certName, Namespace: instance.Namespace}, existing)
 	if err != nil {
 		if !errors.IsNotFound(err) {
 			return err
@@ -454,7 +459,7 @@ func (r *RayClusterMTLSController) checkTLSCertificatesReady(ctx context.Context
 	}
 	for _, name := range certNames {
 		cert := &certmanagerv1.Certificate{}
-		if err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: instance.Namespace}, cert); err != nil {
+		if err := r.getAPI(ctx, client.ObjectKey{Name: name, Namespace: instance.Namespace}, cert); err != nil {
 			return false, err
 		}
 		if !isCertificateReady(cert) {
@@ -476,7 +481,7 @@ func (r *RayClusterMTLSController) checkTLSCertificateExpiry(ctx context.Context
 	}
 	for _, name := range certNames {
 		cert := &certmanagerv1.Certificate{}
-		if err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: instance.Namespace}, cert); err != nil {
+		if err := r.getAPI(ctx, client.ObjectKey{Name: name, Namespace: instance.Namespace}, cert); err != nil {
 			continue
 		}
 		if cert.Status.NotAfter != nil {
@@ -492,11 +497,12 @@ func (r *RayClusterMTLSController) checkTLSCertificateExpiry(ctx context.Context
 
 // SetupWithManager registers the mTLS controller with the manager.
 func (r *RayClusterMTLSController) SetupWithManager(mgr ctrl.Manager) error {
+	// ODH/RHOAI carry: do not Own cert-manager resources here. The OpenShift
+	// deployment can start before cert-manager CRDs exist, so registering these
+	// watches would make controller startup depend on cert-manager ordering.
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("raycluster-mtls").
 		For(&rayv1.RayCluster{}).
-		Owns(&certmanagerv1.Issuer{}).
-		Owns(&certmanagerv1.Certificate{}).
 		WithOptions(controller.Options{
 			LogConstructor: func(request *reconcile.Request) logr.Logger {
 				logger := ctrl.Log.WithName("controllers").WithName("RayClusterMTLS")
@@ -507,6 +513,16 @@ func (r *RayClusterMTLSController) SetupWithManager(mgr ctrl.Manager) error {
 			},
 		}).
 		Complete(r)
+}
+
+// getAPI reads cert-manager objects directly so the controller can recover when
+// cert-manager CRDs become available after KubeRay has started. This
+// ODH/RHOAI carry must be retained for OpenShift startup ordering.
+func (r *RayClusterMTLSController) getAPI(ctx context.Context, key client.ObjectKey, obj client.Object) error {
+	if r.APIReader != nil {
+		return r.APIReader.Get(ctx, key, obj)
+	}
+	return r.Get(ctx, key, obj)
 }
 
 // --- Shared helpers (also used by tests) ---

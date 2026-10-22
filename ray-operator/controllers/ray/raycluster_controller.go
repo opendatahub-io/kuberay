@@ -56,6 +56,7 @@ var DefaultRequeueDuration = 2 * time.Second
 func NewReconciler(mgr manager.Manager, options RayClusterReconcilerOptions) *RayClusterReconciler {
 	return &RayClusterReconciler{
 		Client:                     mgr.GetClient(),
+		APIReader:                  mgr.GetAPIReader(),
 		Scheme:                     mgr.GetScheme(),
 		Recorder:                   mgr.GetEventRecorder("raycluster-controller"),
 		rayClusterScaleExpectation: expectations.NewRayClusterScaleExpectation(mgr.GetClient()),
@@ -66,6 +67,10 @@ func NewReconciler(mgr manager.Manager, options RayClusterReconcilerOptions) *Ra
 // RayClusterReconciler reconciles a RayCluster object
 type RayClusterReconciler struct {
 	client.Client
+	// ODH/RHOAI carry: use direct API reads for cert-manager resources because
+	// the OpenShift deployment may install cert-manager after KubeRay. Do not
+	// remove this reader or change these reads back to the startup cache.
+	APIReader                  client.Reader
 	Scheme                     *k8sruntime.Scheme
 	Recorder                   events.EventRecorder
 	rayClusterScaleExpectation expectations.RayClusterScaleExpectation
@@ -82,7 +87,6 @@ type RayClusterReconcilerOptions struct {
 	DefaultPodLabels         map[string]string
 	IsOpenShift              bool
 	UseIngressOnOpenShift    bool
-	CertManagerAvailable     bool
 	// OIDCProxyTLSArgs is an ODH/RHOAI carry (RHOAIENG-95575): kube-rbac-proxy
 	// flags derived from the OpenShift APIServer TLS profile and injected into
 	// the auth sidecar. Empty on non-OpenShift. Not present upstream.
@@ -195,15 +199,6 @@ func (r *RayClusterReconciler) rayClusterReconcile(ctx context.Context, instance
 			r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, string(utils.InvalidRayClusterSpec), string(utils.ValidateAction),
 				"RayCluster spec warning %s/%s: %s", instance.Namespace, instance.Name, msg)
 		}
-	}
-
-	// Fail fast when mTLS is requested but cert-manager is not installed.
-	if utils.IsTLSEnabled(&instance.Spec) && !r.options.CertManagerAvailable {
-		err := fmt.Errorf("tlsOptions requires cert-manager, but cert-manager is not installed")
-		logger.Error(err, "cert-manager not available for mTLS")
-		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, string(utils.InvalidRayClusterSpec), string(utils.ValidateAction),
-			"The RayCluster spec is invalid %s/%s: %v", instance.Namespace, instance.Name, err)
-		return ctrl.Result{}, nil
 	}
 
 	if err := utils.ValidateRayClusterUpgradeOptions(instance); err != nil {
@@ -1985,7 +1980,7 @@ func (r *RayClusterReconciler) checkMTLSSecretsReady(ctx context.Context, instan
 	}
 	for _, certName := range certNames {
 		cert := &certmanagerv1.Certificate{}
-		if err := r.Get(ctx, client.ObjectKey{Name: certName, Namespace: instance.Namespace}, cert); err != nil {
+		if err := r.getAPI(ctx, client.ObjectKey{Name: certName, Namespace: instance.Namespace}, cert); err != nil {
 			return fmt.Errorf("certificate %s not found: %w", certName, err)
 		}
 		if !isCertificateReady(cert) {
@@ -2010,6 +2005,17 @@ func (r *RayClusterReconciler) checkMTLSSecretsReady(ctx context.Context, instan
 		}
 	}
 	return nil
+}
+
+// getAPI reads directly from the apiserver when an APIReader is available. This
+// ODH/RHOAI carry is required because the OpenShift deployment may install
+// cert-manager after the KubeRay manager starts; a cache-backed read would
+// otherwise retain the initial discovery failure. Do not remove this path.
+func (r *RayClusterReconciler) getAPI(ctx context.Context, key client.ObjectKey, obj client.Object) error {
+	if r.APIReader != nil {
+		return r.APIReader.Get(ctx, key, obj)
+	}
+	return r.Get(ctx, key, obj)
 }
 
 // SetupWithManager builds the reconciler.

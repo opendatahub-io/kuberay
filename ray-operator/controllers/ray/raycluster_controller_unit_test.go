@@ -4913,7 +4913,7 @@ func TestIngressNeedsUpdateOverridesIngressClassNameWhenRequested(t *testing.T) 
 	assert.Equal(t, "traefik", *existing.Spec.IngressClassName, "an explicitly requested ingress class must override the live value")
 }
 
-func TestReconcile_TLSAutoGenerate_RejectsWithoutCertManager(t *testing.T) {
+func TestReconcile_TLSAutoGenerate_WaitsForCertManager(t *testing.T) {
 	features.SetFeatureGateDuringTest(t, features.RayClusterMTLS, true)
 
 	cluster := &rayv1.RayCluster{
@@ -4946,23 +4946,12 @@ func TestReconcile_TLSAutoGenerate_RejectsWithoutCertManager(t *testing.T) {
 		Scheme:                     scheme.Scheme,
 		Recorder:                   recorder,
 		rayClusterScaleExpectation: expectations.NewRayClusterScaleExpectation(fakeClient),
-		options:                    RayClusterReconcilerOptions{CertManagerAvailable: false},
 	}
 
 	result, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: cluster.Name, Namespace: cluster.Namespace},
 	})
 
-	require.NoError(t, err, "should not return an error (no requeue)")
-	assert.Equal(t, ctrl.Result{}, result, "should not requeue")
-
-	var foundEvent bool
-	for len(recorder.Events) > 0 {
-		event := <-recorder.Events
-		if strings.Contains(event, "cert-manager") && strings.Contains(event, "Warning") {
-			foundEvent = true
-			break
-		}
-	}
-	assert.True(t, foundEvent, "expected a warning event about cert-manager")
+	require.Error(t, err, "mTLS reconciliation should wait for cert-manager resources")
+	assert.Equal(t, DefaultRequeueDuration, result.RequeueAfter, "mTLS reconciliation should retry while cert-manager resources are unavailable")
 }
