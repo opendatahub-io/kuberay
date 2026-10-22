@@ -66,9 +66,10 @@ env_vars:
 		result, err := GetRayJob(test, rayJob.Namespace, rayJob.Name)
 		g.Expect(err).NotTo(HaveOccurred())
 
-		t.Logf("RayJob status: %+v", result.Status)
-
-		g.Expect(result.Status.JobStatus).To(Equal(rayv1.JobStatusSucceeded))
+		g.Expect(result.Status.JobStatus).To(
+			Equal(rayv1.JobStatusSucceeded),
+			"RayJob failed: %s", result.Status.Message,
+		)
 
 		// And the RayJob deployment status is updated accordingly
 		g.Eventually(RayJob(test, rayJob.Namespace, rayJob.Name)).
@@ -78,12 +79,14 @@ env_vars:
 		rayJob, err = GetRayJob(test, rayJob.Namespace, rayJob.Name)
 		g.Expect(err).NotTo(HaveOccurred())
 
-		// TODO (kevin85421): We may need to use `Eventually` instead if the assertion is flaky.
-		// Assert the RayCluster has been torn down
-		g.Eventually(func() bool {
+		g.Expect(rayJob.Status.RayClusterName).NotTo(BeEmpty())
+
+		g.Eventually(func() error {
 			_, err := GetRayCluster(test, namespace.Name, rayJob.Status.RayClusterName)
-			return k8serrors.IsNotFound(err)
-		}, TestTimeoutMedium).Should(BeTrue())
+			return err
+		}, TestTimeoutMedium).Should(
+			WithTransform(k8serrors.IsNotFound, BeTrue()),
+		)
 	})
 
 	test.T().Run("Failing RayJob without cluster shutdown after finished", func(t *testing.T) {
