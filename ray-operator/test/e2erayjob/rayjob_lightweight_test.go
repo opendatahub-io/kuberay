@@ -167,6 +167,7 @@ env_vars:
 	})
 
 	test.T().Run("Successful RayJob in HTTP mode with auth token", func(t *testing.T) {
+		authTest := With(t)
 		g := NewWithT(t)
 
 		rayJobAC := rayv1ac.RayJob("counter-auth", namespace.Name).
@@ -210,14 +211,14 @@ env_vars:
 		g.Expect(headPod).NotTo(BeNil())
 
 		// Verify Ray container has auth token env vars
-		VerifyContainerAuthTokenEnvVars(test, rayCluster, &headPod.Spec.Containers[utils.RayContainerIndex])
+		VerifyContainerAuthTokenEnvVars(authTest, rayCluster, &headPod.Spec.Containers[utils.RayContainerIndex])
 
 		// Verify worker pods have auth token env vars
 		workerPods, err := GetWorkerPods(test, rayCluster)
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(workerPods).ToNot(BeEmpty())
 		for _, workerPod := range workerPods {
-			VerifyContainerAuthTokenEnvVars(test, rayCluster, &workerPod.Spec.Containers[utils.RayContainerIndex])
+			VerifyContainerAuthTokenEnvVars(authTest, rayCluster, &workerPod.Spec.Containers[utils.RayContainerIndex])
 		}
 
 		LogWithTimestamp(test.T(), "Waiting for RayJob %s/%s to complete", rayJob.Namespace, rayJob.Name)
