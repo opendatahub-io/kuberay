@@ -5,8 +5,17 @@ set -o allexport
 source .env-odh
 set +o allexport
 
-# Create results directory if it doesn't exist
-mkdir -p results
+# Jenkins shift-left: podman --userns=keep-id --user <agent-uid>.
+# WORKDIR /kuberay/tests is root-owned; Go defaults GOCACHE to
+# $HOME/.cache/go-build (HOME often equals WORKDIR), which fails with:
+#   mkdir /kuberay/tests/.cache: permission denied
+export HOME="${KUBERAY_TEST_HOME:-/tmp/kuberay-test-home}"
+export GOCACHE="${GOCACHE:-${HOME}/go-build}"
+export GOTMPDIR="${GOTMPDIR:-${HOME}/tmp}"
+export TMPDIR="${TMPDIR:-${GOTMPDIR}}"
+
+# Create results + writable Go dirs (results is also volume-mounted by Jenkins)
+mkdir -p results "${HOME}" "${GOCACHE}" "${GOTMPDIR}"
 
 # Initialize variables
 PARSED_TEST_TAGS=""
