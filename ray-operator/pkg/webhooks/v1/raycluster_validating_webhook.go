@@ -61,7 +61,10 @@ func (w *RayClusterWebhook) validateRayCluster(rayCluster *rayv1.RayCluster) err
 	// OpenShift clusters are still covered because the OpenShift API surface is
 	// present even when their spec.networkPolicy has not been backfilled yet.
 	if w.isOpenShift() {
-		if err := validateManagedOpenShiftNetworkPolicy(rayCluster); err != nil {
+		if utils.ManagedByExternalController(rayCluster.Spec.ManagedBy) != nil {
+			allErrs = append(allErrs, field.Invalid(field.NewPath("spec").Child("managedBy"), *rayCluster.Spec.ManagedBy,
+				"externally managed RayClusters are not supported by the OpenShift platform profile because KubeRay skips NetworkPolicy reconciliation"))
+		} else if err := validateManagedOpenShiftNetworkPolicy(rayCluster); err != nil {
 			allErrs = append(allErrs, err)
 		}
 	}
@@ -146,9 +149,6 @@ func validateManagedOpenShiftNetworkPolicy(rayCluster *rayv1.RayCluster) *field.
 	// removed when RayStartParams change. The current check requires the new
 	// effective-port rule but does not reject a user-added stale rule because
 	// native KubeRay policy extensions must remain supported.
-	// TODO(ODH NetworkPolicy): If RHOAI later supports externally managed
-	// RayClusters, define an explicit alternate controller contract before
-	// exempting them from this baseline.
 	return nil
 }
 
