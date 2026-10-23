@@ -108,11 +108,12 @@ func ensureOpenShiftNetworkPolicy(spec *rayv1.RayClusterSpec) {
 		}
 		return append(rules, rule)
 	}
-	// TODO(ODH NetworkPolicy): The same-namespace 10001 allowance is retained
-	// while the platform client-source contract is unresolved. Users may install
-	// Jupyter workbenches in arbitrary namespaces, so this rule must not be
-	// broadened to all namespaces. A future cross-namespace rule requires a
-	// protected namespace label contract or explicit per-RayCluster source rules.
+	// TODO(ODH NetworkPolicy): ODH workbench Pods have stable controller-owned
+	// labels (opendatahub.io/workbenches=true and
+	// opendatahub.io/odh-managed=true), but this rule remains broad for now.
+	// Removing the empty selector would tighten workbench access while breaking
+	// supported clusterSelector RayJob submitters that do not receive the Ray
+	// origin label. Cross-namespace workbench access is not supported.
 	spec.NetworkPolicy.Head.IngressRules = appendIngress(spec.NetworkPolicy.Head.IngressRules, networkingv1.NetworkPolicyIngressRule{
 		From:  []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}},
 		Ports: []networkingv1.NetworkPolicyPort{port(dashboardPort), port(DefaultClientPort)},
@@ -126,10 +127,10 @@ func ensureOpenShiftNetworkPolicy(spec *rayv1.RayClusterSpec) {
 		Ports: []networkingv1.NetworkPolicyPort{port(dashboardPort)},
 	})
 	spec.NetworkPolicy.Head.IngressRules = appendIngress(spec.NetworkPolicy.Head.IngressRules, networkingv1.NetworkPolicyIngressRule{
-		// TODO(ODH NetworkPolicy): The supported caller for the kube-rbac-proxy
-		// port is not yet established. The Gateway HTTPRoute currently targets
-		// the dashboard service port, so do not guess a gateway peer here until
-		// the 8443 data path is confirmed; changing this rule may break auth.
+		// TODO(ODH NetworkPolicy): The Ray head kube-rbac-proxy caller for 8443
+		// is not established. The Gateway data path targets the dashboard
+		// Service/port, not this Ray head port, so retain this compatibility rule
+		// until direct 8443 callers are ruled out in a deployed environment.
 		Ports: []networkingv1.NetworkPolicyPort{port(8443)},
 	})
 	namespaces := []string{}
@@ -164,14 +165,18 @@ func ensureOpenShiftNetworkPolicy(spec *rayv1.RayClusterSpec) {
 	}
 	// TODO(ODH NetworkPolicy): Confirm whether the supported monitoring
 	// deployment scrapes worker Pods before adding worker-group metrics rules.
-	gatewayNamespace := os.Getenv("GATEWAY_NAMESPACE")
-	if gatewayNamespace == "" {
-		gatewayNamespace = "openshift-ingress"
+	gatewayNamespace := GetGatewayNamespace()
+	gatewayName := GetGatewayName()
+	gatewayPeer := networkingv1.NetworkPolicyPeer{
+		NamespaceSelector: &metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{
+			Key: corev1.LabelMetadataName, Operator: metav1.LabelSelectorOpIn, Values: []string{gatewayNamespace},
+		}}},
+		PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
+			"gateway.networking.k8s.io/gateway-name": gatewayName,
+		}},
 	}
 	spec.NetworkPolicy.Head.IngressRules = appendIngress(spec.NetworkPolicy.Head.IngressRules, networkingv1.NetworkPolicyIngressRule{
-		From: []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{
-			Key: corev1.LabelMetadataName, Operator: metav1.LabelSelectorOpIn, Values: []string{gatewayNamespace},
-		}}}}},
+		From:  []networkingv1.NetworkPolicyPeer{gatewayPeer},
 		Ports: []networkingv1.NetworkPolicyPort{port(8265)},
 	})
 }

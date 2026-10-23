@@ -5,9 +5,12 @@ import (
 
 	routev1 "github.com/openshift/api/route/v1"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 	"github.com/ray-project/kuberay/ray-operator/controllers/ray/utils"
@@ -96,6 +99,26 @@ func TestValidateManagedOpenShiftRayClusterNetworkPolicyRejectsMissingBaselineRu
 
 	webhook := managedOpenShiftWebhook()
 	require.Error(t, webhook.validateRayCluster(cluster))
+}
+
+func TestValidateManagedOpenShiftRayClusterNetworkPolicyRejectsCustomRule(t *testing.T) {
+	cluster := &rayv1.RayCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "managed-cluster",
+			Annotations: map[string]string{
+				utils.EnableSecureTrustedNetworkAnnotationKey: "true",
+			},
+		},
+	}
+	utils.EnsureOpenShiftRayClusterSecurity(cluster)
+	port := intstr.FromInt(9999)
+	protocol := corev1.ProtocolTCP
+	cluster.Spec.NetworkPolicy.Head.IngressRules = append(
+		cluster.Spec.NetworkPolicy.Head.IngressRules,
+		networkingv1.NetworkPolicyIngressRule{Ports: []networkingv1.NetworkPolicyPort{{Protocol: &protocol, Port: &port}}},
+	)
+
+	require.Error(t, managedOpenShiftWebhook().validateRayCluster(cluster))
 }
 
 func TestValidateManagedOpenShiftRayClusterNetworkPolicyRejectsStalePortRules(t *testing.T) {

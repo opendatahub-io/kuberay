@@ -100,6 +100,30 @@ func TestOpenShiftNetworkPolicyInvalidRayPortsUseDefaults(t *testing.T) {
 	assert.Contains(t, rulePorts(rules[1]), int32(DefaultDashboardPort))
 }
 
+func TestOpenShiftGatewayIngressUsesGatewayPodSelector(t *testing.T) {
+	t.Setenv("GATEWAY_NAMESPACE", "openshift-ingress")
+	t.Setenv("GATEWAY_NAME", "data-science-gateway")
+	cluster := &rayv1.RayCluster{}
+	EnsureOpenShiftRayClusterSecurity(cluster)
+
+	found := false
+	for _, rule := range cluster.Spec.NetworkPolicy.Head.IngressRules {
+		for _, port := range rule.Ports {
+			if port.Port == nil || *port.Port != intstr.FromInt32(DefaultDashboardPort) || len(rule.From) != 1 {
+				continue
+			}
+			peer := rule.From[0]
+			if peer.NamespaceSelector == nil || peer.PodSelector == nil {
+				continue
+			}
+			if peer.PodSelector.MatchLabels["gateway.networking.k8s.io/gateway-name"] == "data-science-gateway" {
+				found = true
+			}
+		}
+	}
+	assert.True(t, found, "dashboard ingress must be restricted to the named Gateway dataplane")
+}
+
 func rulePorts(rule networkingv1.NetworkPolicyIngressRule) []int32 {
 	ports := make([]int32, 0, len(rule.Ports))
 	for _, port := range rule.Ports {

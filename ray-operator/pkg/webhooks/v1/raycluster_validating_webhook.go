@@ -134,10 +134,23 @@ func validateManagedOpenShiftNetworkPolicy(rayCluster *rayv1.RayCluster) *field.
 	defaults := rayCluster.DeepCopy()
 	defaults.Spec.NetworkPolicy = nil
 	utils.EnsureOpenShiftRayClusterNetworkPolicy(defaults)
-	for _, requiredRule := range defaults.Spec.NetworkPolicy.Head.IngressRules {
-		if !containsIngressRule(networkPolicy.Head.IngressRules, requiredRule) {
-			return field.Invalid(networkPolicyPath.Child("head").Child("ingressRules"), networkPolicy.Head.IngressRules,
-				fmt.Sprintf("managed OpenShift RayClusters must retain platform ingress rule %#v", requiredRule))
+	if err := validateManagedRules(
+		networkPolicy.Head,
+		defaults.Spec.NetworkPolicy.Head,
+		networkPolicyPath.Child("head"),
+	); err != nil {
+		return err
+	}
+	if err := validateManagedRules(networkPolicy.Worker, nil, networkPolicyPath.Child("worker")); err != nil {
+		return err
+	}
+	for i := range networkPolicy.WorkerGroups {
+		if err := validateManagedRules(
+			&networkPolicy.WorkerGroups[i].NetworkPolicyRules,
+			nil,
+			networkPolicyPath.Child("workerGroups").Index(i),
+		); err != nil {
+			return err
 		}
 	}
 
@@ -149,6 +162,35 @@ func validateManagedOpenShiftNetworkPolicy(rayCluster *rayv1.RayCluster) *field.
 	// removed when RayStartParams change. The current check requires the new
 	// effective-port rule but does not reject a user-added stale rule because
 	// native KubeRay policy extensions must remain supported.
+	return nil
+}
+
+// validateManagedRules makes the OpenShift platform defaults an exact ceiling
+// for the NetworkPolicy rule extensions in the RayCluster spec. The native
+// KubeRay policy API remains unchanged for non-OpenShift clusters; this
+// restriction applies only to the supported managed platform profile.
+func validateManagedRules(rules, allowed *rayv1.NetworkPolicyRules, path *field.Path) *field.Error {
+	if rules == nil {
+		return nil
+	}
+	if len(rules.EgressRules) > 0 {
+		return field.Forbidden(path.Child("egressRules"), "managed OpenShift RayClusters cannot add custom egress NetworkPolicy rules")
+	}
+	allowedIngress := []networkingv1.NetworkPolicyIngressRule(nil)
+	if allowed != nil {
+		allowedIngress = allowed.IngressRules
+	}
+	for _, rule := range rules.IngressRules {
+		if !containsIngressRule(allowedIngress, rule) {
+			return field.Forbidden(path.Child("ingressRules"), fmt.Sprintf("custom NetworkPolicy ingress rule %#v is not permitted for managed OpenShift RayClusters", rule))
+		}
+	}
+	for _, requiredRule := range allowedIngress {
+		if !containsIngressRule(rules.IngressRules, requiredRule) {
+			return field.Invalid(path.Child("ingressRules"), rules.IngressRules,
+				fmt.Sprintf("managed OpenShift RayClusters must retain platform ingress rule %#v", requiredRule))
+		}
+	}
 	return nil
 }
 
