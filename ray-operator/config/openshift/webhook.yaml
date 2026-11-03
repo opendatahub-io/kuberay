@@ -43,3 +43,31 @@ webhooks:
     resources:
     - rayclusters
   sideEffects: None
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: kuberay-validating-webhook-configuration
+  annotations:
+    cert-manager.io/inject-ca-from: $(namespace)/serving-cert
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: kuberay-webhook-service
+      namespace: $(namespace)
+      path: /validate-ray-io-v1-raycluster
+  failurePolicy: Fail
+  name: vraycluster.kb.io
+  rules:
+  - apiGroups:
+    - ray.io
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - rayclusters
+  sideEffects: None
