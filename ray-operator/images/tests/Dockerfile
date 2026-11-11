@@ -2,6 +2,7 @@ FROM golang:1.26-bookworm
 
 ENV KUBECONFIG=/kuberay/tests/.kube/config
 ENV GOFLAGS=-mod=mod
+ENV KUBERAY_TEST_ROOT=/kuberay/tests
 
 # Set the working directory inside the container
 WORKDIR /kuberay/tests

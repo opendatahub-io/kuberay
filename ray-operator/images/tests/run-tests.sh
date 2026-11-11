@@ -14,10 +14,17 @@ export GOCACHE="${GOCACHE:-${HOME}/go-build}"
 export GOTMPDIR="${GOTMPDIR:-${HOME}/tmp}"
 export TMPDIR="${TMPDIR:-${GOTMPDIR}}"
 
-# Parent for test artifact dirs (MkdirTemp in e2e support); Jenkins/test image use
-# /kuberay/tests/results. Konflux ODH PR tests clone under /tmp and must create this path.
-OUTPUT_PARENT="${KUBERAY_TEST_OUTPUT_DIR:-results}"
-mkdir -p "$OUTPUT_PARENT" results "${HOME}" "${GOCACHE}" "${GOTMPDIR}"
+# Absolute artifact parent for all packages (Jenkins volume, Prow/Konflux cp results/).
+KUBERAY_TEST_ROOT="$(cd "$(pwd)" && pwd)"
+export KUBERAY_TEST_ROOT
+OUTPUT_REL="${KUBERAY_TEST_OUTPUT_DIR:-results}"
+if [[ "$OUTPUT_REL" = /* ]]; then
+  OUTPUT_PARENT="$OUTPUT_REL"
+else
+  OUTPUT_PARENT="${KUBERAY_TEST_ROOT}/${OUTPUT_REL}"
+fi
+export KUBERAY_TEST_OUTPUT_DIR="$OUTPUT_PARENT"
+mkdir -p "$OUTPUT_PARENT" "${HOME}" "${GOCACHE}" "${GOTMPDIR}"
 
 # Initialize variables
 PARSED_TEST_TAGS=""
@@ -147,6 +154,7 @@ echo "Selected tiers: ${SELECTED_TIERS[*]}"
 echo "Test packages: ${TEST_PACKAGES[*]}"
 echo "Running e2e tests matching: $TEST_RUN_REGEX"
 echo "Test timeout: $TEST_TIMEOUT"
+echo "Test output directory: $OUTPUT_PARENT"
 
 # Run tests with junit XML output (single invocation across all packages)
-gotestsum --format standard-verbose --junitfile results/xunit_report.xml --junitfile-testsuite-name short --junitfile-testcase-classname relative -- -timeout "$TEST_TIMEOUT" -run "$TEST_RUN_REGEX" "${TEST_PACKAGES[@]}" -p 1 -parallel 1 "${EXTRA_ARGS[@]}"
+gotestsum --format standard-verbose --junitfile "${OUTPUT_PARENT}/xunit_report.xml" --junitfile-testsuite-name short --junitfile-testcase-classname relative -- -timeout "$TEST_TIMEOUT" -run "$TEST_RUN_REGEX" "${TEST_PACKAGES[@]}" -p 1 -parallel 1 "${EXTRA_ARGS[@]}"

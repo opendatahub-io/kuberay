@@ -8,6 +8,10 @@ const (
 	// KuberayTestOutputDir is the testing output directory, to write output files into.
 	KuberayTestOutputDir = "KUBERAY_TEST_OUTPUT_DIR"
 
+	// KuberayTestRoot is the e2e working directory (module/test image WORKDIR). Relative
+	// KUBERAY_TEST_OUTPUT_DIR values are resolved against this, not the Go package directory.
+	KuberayTestRoot = "KUBERAY_TEST_ROOT"
+
 	// KuberayTestRayVersion is the version of Ray to use for testing.
 	KuberayTestRayVersion = "KUBERAY_TEST_RAY_VERSION"
 
