@@ -92,6 +92,9 @@ func (t *T) OutputDir() string {
 				}
 			}
 			LogWithTimestamp(t.T(), "Creating output directory in parent directory: %s", parent)
+			if err := os.MkdirAll(parent, 0o755); err != nil {
+				t.T().Fatalf("Error creating output parent directory: %v", err)
+			}
 			safeName := strings.ReplaceAll(t.T().Name(), "/", "_")
 			dir, err := os.MkdirTemp(parent, safeName)
 			if err != nil {

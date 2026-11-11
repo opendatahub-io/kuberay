@@ -14,8 +14,10 @@ export GOCACHE="${GOCACHE:-${HOME}/go-build}"
 export GOTMPDIR="${GOTMPDIR:-${HOME}/tmp}"
 export TMPDIR="${TMPDIR:-${GOTMPDIR}}"
 
-# Create results + writable Go dirs (results is also volume-mounted by Jenkins)
-mkdir -p results "${HOME}" "${GOCACHE}" "${GOTMPDIR}"
+# Parent for test artifact dirs (MkdirTemp in e2e support); Jenkins/test image use
+# /kuberay/tests/results. Konflux ODH PR tests clone under /tmp and must create this path.
+OUTPUT_PARENT="${KUBERAY_TEST_OUTPUT_DIR:-results}"
+mkdir -p "$OUTPUT_PARENT" results "${HOME}" "${GOCACHE}" "${GOTMPDIR}"
 
 # Initialize variables
 PARSED_TEST_TAGS=""
@@ -24,8 +26,8 @@ EXTRA_ARGS=()
 # Tier definitions: each tier maps to Go package paths and a test-name regex fragment.
 declare -A TIER_PACKAGES TIER_REGEX
 
-TIER_PACKAGES[Tier1]="./test/e2erayjob ./test/e2eautoscaler"
-TIER_REGEX[Tier1]="TestRayJobWithClusterSelector|TestRayJob|TestRayJobSuspend|TestRayJobLightWeightMode|TestRayClusterAutoscaler"
+TIER_PACKAGES[Tier1]="./test/e2erayjob ./test/e2eautoscaler ./test/e2e"
+TIER_REGEX[Tier1]="TestRayJobWithClusterSelector|TestRayJob|TestRayJobSuspend|TestRayJobLightWeightMode|TestRayClusterAutoscaler|TestRayClusterOpenShiftNetworkPolicy"
 
 TIER_PACKAGES[Smoke]="./test/e2e"
 TIER_REGEX[Smoke]="TestRayClusterAuthenticationRhoai|TestRayClusterAuthOptions|TestRayClusterRHOAIImages"
