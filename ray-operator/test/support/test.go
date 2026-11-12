@@ -85,13 +85,11 @@ func (t *T) OutputDir() string {
 	t.T().Helper()
 	t.once.outputDir.Do(func() {
 		if parent, ok := os.LookupEnv(KuberayTestOutputDir); ok {
-			if !path.IsAbs(parent) {
-				if cwd, err := os.Getwd(); err == nil {
-					// best effort to output the parent absolute path
-					parent = path.Join(cwd, parent)
-				}
-			}
+			parent = resolveOutputParent(parent)
 			LogWithTimestamp(t.T(), "Creating output directory in parent directory: %s", parent)
+			if err := os.MkdirAll(parent, 0o755); err != nil {
+				t.T().Fatalf("Error creating output parent directory: %v", err)
+			}
 			safeName := strings.ReplaceAll(t.T().Name(), "/", "_")
 			dir, err := os.MkdirTemp(parent, safeName)
 			if err != nil {
@@ -121,4 +119,17 @@ func (t *T) NewTestNamespace(options ...Option[*corev1.Namespace]) *corev1.Names
 func LogWithTimestamp(t *testing.T, format string, args ...any) {
 	t.Helper()
 	t.Logf("[%s] %s", time.Now().Format(time.RFC3339), fmt.Sprintf(format, args...))
+}
+
+func resolveOutputParent(parent string) string {
+	if path.IsAbs(parent) {
+		return parent
+	}
+	if root, ok := os.LookupEnv(KuberayTestRoot); ok && root != "" {
+		return path.Join(root, parent)
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		return path.Join(cwd, parent)
+	}
+	return parent
 }

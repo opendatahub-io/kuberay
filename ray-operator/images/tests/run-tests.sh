@@ -14,8 +14,17 @@ export GOCACHE="${GOCACHE:-${HOME}/go-build}"
 export GOTMPDIR="${GOTMPDIR:-${HOME}/tmp}"
 export TMPDIR="${TMPDIR:-${GOTMPDIR}}"
 
-# Create results + writable Go dirs (results is also volume-mounted by Jenkins)
-mkdir -p results "${HOME}" "${GOCACHE}" "${GOTMPDIR}"
+# Absolute artifact parent for all packages (Jenkins volume, Prow/Konflux cp results/).
+KUBERAY_TEST_ROOT="$(cd "$(pwd)" && pwd)"
+export KUBERAY_TEST_ROOT
+OUTPUT_REL="${KUBERAY_TEST_OUTPUT_DIR:-results}"
+if [[ "$OUTPUT_REL" = /* ]]; then
+  OUTPUT_PARENT="$OUTPUT_REL"
+else
+  OUTPUT_PARENT="${KUBERAY_TEST_ROOT}/${OUTPUT_REL}"
+fi
+export KUBERAY_TEST_OUTPUT_DIR="$OUTPUT_PARENT"
+mkdir -p "$OUTPUT_PARENT" "${HOME}" "${GOCACHE}" "${GOTMPDIR}"
 
 # Initialize variables
 PARSED_TEST_TAGS=""
@@ -24,8 +33,8 @@ EXTRA_ARGS=()
 # Tier definitions: each tier maps to Go package paths and a test-name regex fragment.
 declare -A TIER_PACKAGES TIER_REGEX
 
-TIER_PACKAGES[Tier1]="./test/e2erayjob ./test/e2eautoscaler"
-TIER_REGEX[Tier1]="TestRayJobWithClusterSelector|TestRayJob|TestRayJobSuspend|TestRayJobLightWeightMode|TestRayClusterAutoscaler"
+TIER_PACKAGES[Tier1]="./test/e2erayjob ./test/e2eautoscaler ./test/e2e"
+TIER_REGEX[Tier1]="TestRayJobWithClusterSelector|TestRayJob|TestRayJobSuspend|TestRayJobLightWeightMode|TestRayClusterAutoscaler|TestRayClusterOpenShiftNetworkPolicy"
 
 TIER_PACKAGES[Smoke]="./test/e2e"
 TIER_REGEX[Smoke]="TestRayClusterAuthenticationRhoai|TestRayClusterAuthOptions|TestRayClusterRHOAIImages"
@@ -145,6 +154,7 @@ echo "Selected tiers: ${SELECTED_TIERS[*]}"
 echo "Test packages: ${TEST_PACKAGES[*]}"
 echo "Running e2e tests matching: $TEST_RUN_REGEX"
 echo "Test timeout: $TEST_TIMEOUT"
+echo "Test output directory: $OUTPUT_PARENT"
 
 # Run tests with junit XML output (single invocation across all packages)
-gotestsum --format standard-verbose --junitfile results/xunit_report.xml --junitfile-testsuite-name short --junitfile-testcase-classname relative -- -timeout "$TEST_TIMEOUT" -run "$TEST_RUN_REGEX" "${TEST_PACKAGES[@]}" -p 1 -parallel 1 "${EXTRA_ARGS[@]}"
+gotestsum --format standard-verbose --junitfile "${OUTPUT_PARENT}/xunit_report.xml" --junitfile-testsuite-name short --junitfile-testcase-classname relative -- -timeout "$TEST_TIMEOUT" -run "$TEST_RUN_REGEX" "${TEST_PACKAGES[@]}" -p 1 -parallel 1 "${EXTRA_ARGS[@]}"
