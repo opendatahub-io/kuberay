@@ -343,6 +343,15 @@ rules:
   - update
   - watch
 - apiGroups:
+  - monitoring.coreos.com
+  resources:
+  - podmonitors
+  verbs:
+  - create
+  - delete
+  - get
+  - update
+- apiGroups:
   - networking.k8s.io
   resources:
   - ingressclasses
