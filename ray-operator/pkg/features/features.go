@@ -80,6 +80,10 @@ const (
 	// Enables mTLS (spec.tlsOptions) for RayClusters via cert-manager.
 	RayClusterMTLS featuregate.Feature = "RayClusterMTLS"
 
+	// CARRY: RHAI-23206 - OpenShift enables automatic per-RayCluster PodMonitors.
+	// Disabling this gate keeps the controller running to remove owned monitors.
+	RayClusterPodMonitor featuregate.Feature = "RayClusterPodMonitor"
+
 	// owner: @chiayi @Future-Outlier
 	// rep: N/A
 	// alpha: v1.7
@@ -112,6 +116,7 @@ var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 	RayClusterNetworkPolicy:          {Default: false, PreRelease: featuregate.Alpha},
 	GCSFaultToleranceEmbeddedStorage: {Default: false, PreRelease: featuregate.Alpha},
 	RayClusterMTLS:                   {Default: false, PreRelease: featuregate.Alpha},
+	RayClusterPodMonitor:             {Default: false, PreRelease: featuregate.Alpha}, // CARRY: RHAI-23206; enabled in the OpenShift overlay.
 	RayClusterHistoryServer:          {Default: false, PreRelease: featuregate.Alpha},
 	KubernetesWAS:                    {Default: false, PreRelease: featuregate.Alpha},
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/go-logr/zapr"
 	configv1 "github.com/openshift/api/config/v1"
 	routev1 "github.com/openshift/api/route/v1"
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -60,6 +61,7 @@ func init() {
 	utilruntime.Must(batchv1.AddToScheme(scheme))
 	utilruntime.Must(configapi.AddToScheme(scheme))
 	utilruntime.Must(certmanagerv1.AddToScheme(scheme))
+	utilruntime.Must(monitoringv1.AddToScheme(scheme)) // CARRY: RHAI-23206 - optional PodMonitor API.
 	utilruntime.Must(gwv1.Install(scheme))
 	utilruntime.Must(gatewayv1beta1.Install(scheme))
 	// +kubebuilder:scaffold:scheme
@@ -396,6 +398,10 @@ func main() {
 			"unable to create controller", "controller", "NetworkPolicy")
 		setupLog.Info("NetworkPolicy controller registered")
 	}
+
+	// CARRY: RHAI-23206 - register even when disabled, so existing PodMonitors are cleaned up.
+	exitOnError(ray.NewPodMonitorController(mgr).SetupWithManager(mgr, config.ReconcileConcurrency),
+		"unable to create controller", "controller", "PodMonitor")
 
 	if isOpenShift && features.Enabled(features.RayClusterMTLS) && features.Enabled(features.RayClusterNetworkPolicy) {
 		legacySecurityController := ray.NewLegacySecurityController(mgr, isOpenShift)
