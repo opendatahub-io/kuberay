@@ -393,11 +393,11 @@ The OpenShift overlay enables `RayClusterPodMonitor`: one owned PodMonitor per e
 RayCluster (including RayService-created clusters), scraping head/worker Pods on the named
 `metrics` port for user-workload monitoring (UWM).
 
-- Set `odh.ray.io/cluster-podmonitor: disabled` on a standalone RayCluster or its owning
+* Set `odh.ray.io/cluster-podmonitor: disabled` on a standalone RayCluster or its owning
   RayJob to opt out; remove it to resume. The live RayJob value controls its owned clusters.
-- Set `--feature-gates=RayClusterPodMonitor=false` to remove owned monitors globally.
+* Set `--feature-gates=RayClusterPodMonitor=false` to remove owned monitors globally.
   Terminating clusters also use delete-only mode; foreign monitors are preserved.
-- Missing monitoring APIs are skipped; monitoring failures do not block workloads.
+* Missing monitoring APIs are skipped; monitoring failures do not block workloads.
   PodMonitors use `monitoring.opendatahub.io/scrape: "false"` to exclude the RHOAI MonitoringStack.
-- Run controller tests with `make test WHAT=./controllers/ray` from `ray-operator/`.
+* Run controller tests with `make test WHAT=./controllers/ray` from `ray-operator/`.
   Live UWM/upgrade validation and metrics NetworkPolicy ingress remain companion work.
