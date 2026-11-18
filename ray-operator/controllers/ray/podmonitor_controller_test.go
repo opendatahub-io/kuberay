@@ -13,6 +13,7 @@ import (
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -24,6 +25,22 @@ import (
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 	"github.com/ray-project/kuberay/ray-operator/pkg/features"
 )
+
+type observedPodMonitorReader struct {
+	client.Reader
+	results chan error
+}
+
+func (r observedPodMonitorReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	err := r.Reader.Get(ctx, key, obj, opts...)
+	if _, ok := obj.(*monitoringv1.PodMonitor); ok {
+		select {
+		case r.results <- err:
+		default:
+		}
+	}
+	return err
+}
 
 // Exercise the real REST mapper and manager lifecycle: fake clients cannot
 // reproduce startup failures caused by watches on an absent optional CRD.
@@ -63,6 +80,8 @@ func TestPodMonitorManagerWithoutOptionalAPI(t *testing.T) {
 	})
 	require.NoError(t, err)
 	r := NewPodMonitorController(mgr)
+	lookups := make(chan error, 1)
+	r.APIReader = observedPodMonitorReader{Reader: r.APIReader, results: lookups}
 	require.NoError(t, r.SetupWithManager(mgr, 1))
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -94,13 +113,13 @@ func TestPodMonitorManagerWithoutOptionalAPI(t *testing.T) {
 		APIVersion: rayv1.GroupVersion.String(), Kind: "RayJob", Name: job.Name, UID: job.UID, Controller: new(true),
 	}}
 	require.NoError(t, c.Create(ctx, cluster))
-	require.Eventually(t, func() bool {
-		return r.Get(ctx, client.ObjectKeyFromObject(cluster), &rayv1.RayCluster{}) == nil
-	}, 10*time.Second, 100*time.Millisecond)
-	// The absent monitoring API must neither block the cache nor fail reconciliation.
-	result, err := r.Reconcile(syncCtx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
-	require.NoError(t, err)
-	assert.Equal(t, podMonitorRequeueInterval, result.RequeueAfter)
+	// A real worker must reach the missing API; cache sync alone cannot prove this.
+	select {
+	case err := <-lookups:
+		require.True(t, meta.IsNoMatchError(err), "expected the missing PodMonitor API, got %v", err)
+	case <-syncCtx.Done():
+		t.Fatal("controller worker did not reach the PodMonitor API")
+	}
 	select {
 	case err := <-done:
 		t.Fatalf("manager exited while PodMonitor CRD was absent: %v", err)
