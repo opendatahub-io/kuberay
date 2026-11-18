@@ -77,6 +77,7 @@ func TestPodMonitorCreationAndDrift(t *testing.T) {
 	assert.Equal(t, podMonitorRequeueInterval, reconcilePodMonitor(t, r, cluster).RequeueAfter)
 	monitor := getTestPodMonitor(t, r, cluster)
 	assert.True(t, metav1.IsControlledBy(monitor, cluster))
+	assert.Equal(t, new(false), metav1.GetControllerOf(monitor).BlockOwnerDeletion)
 	assert.Equal(t, "false", monitor.Labels[podMonitorScrapeLabel])
 	assert.Equal(t, []string{utils.RayClusterLabelKey, utils.RayNodeTypeLabelKey, utils.RayNodeGroupLabelKey}, monitor.Spec.PodTargetLabels)
 	require.Len(t, monitor.Spec.PodMetricsEndpoints, 1)
@@ -230,35 +231,40 @@ func TestPodMonitorTerminatingClustersAreDeleteOnly(t *testing.T) {
 }
 
 func TestPodMonitorRayJobLineageAndOptOut(t *testing.T) {
-	cluster := podMonitorTestCluster()
-	job := &rayv1.RayJob{ObjectMeta: metav1.ObjectMeta{Name: "train-job", Namespace: cluster.Namespace, UID: "job-uid"}}
-	r := newPodMonitorTestController(t, job)
-	require.NoError(t, controllerutil.SetControllerReference(job, cluster, r.Scheme()))
-	require.NoError(t, r.Create(t.Context(), cluster))
-	reconcilePodMonitor(t, r, cluster)
-	relabels := getTestPodMonitor(t, r, cluster).Spec.PodMetricsEndpoints[0].RelabelConfigs
-	require.Len(t, relabels, 1)
-	assert.Equal(t, "rayjob", relabels[0].TargetLabel)
-	assert.Equal(t, job.Name, *relabels[0].Replacement)
-	job.Annotations = map[string]string{podMonitorOptOutAnnotation: "disabled"}
-	require.NoError(t, r.Update(t.Context(), job))
-	reconcilePodMonitor(t, r, cluster)
-	monitors := &monitoringv1.PodMonitorList{}
-	require.NoError(t, r.List(t.Context(), monitors))
-	assert.Empty(t, monitors.Items)
-	delete(job.Annotations, podMonitorOptOutAnnotation)
-	require.NoError(t, r.Update(t.Context(), job))
-	reconcilePodMonitor(t, r, cluster)
-	getTestPodMonitor(t, r, cluster)
+	for _, apiVersion := range []string{rayv1.GroupVersion.String(), "ray.io/v1alpha1"} {
+		t.Run(apiVersion, func(t *testing.T) {
+			cluster := podMonitorTestCluster()
+			job := &rayv1.RayJob{ObjectMeta: metav1.ObjectMeta{Name: "train-job", Namespace: cluster.Namespace, UID: "job-uid"}}
+			r := newPodMonitorTestController(t, job)
+			require.NoError(t, controllerutil.SetControllerReference(job, cluster, r.Scheme()))
+			cluster.OwnerReferences[0].APIVersion = apiVersion
+			require.NoError(t, r.Create(t.Context(), cluster))
+			reconcilePodMonitor(t, r, cluster)
+			relabels := getTestPodMonitor(t, r, cluster).Spec.PodMetricsEndpoints[0].RelabelConfigs
+			require.Len(t, relabels, 1)
+			assert.Equal(t, "rayjob", relabels[0].TargetLabel)
+			assert.Equal(t, job.Name, *relabels[0].Replacement)
+			job.Annotations = map[string]string{podMonitorOptOutAnnotation: "disabled"}
+			require.NoError(t, r.Update(t.Context(), job))
+			reconcilePodMonitor(t, r, cluster)
+			monitors := &monitoringv1.PodMonitorList{}
+			require.NoError(t, r.List(t.Context(), monitors))
+			assert.Empty(t, monitors.Items)
+			delete(job.Annotations, podMonitorOptOutAnnotation)
+			require.NoError(t, r.Update(t.Context(), job))
+			reconcilePodMonitor(t, r, cluster)
+			getTestPodMonitor(t, r, cluster)
 
-	// A replacement RayJob with the same name must not control the old cluster.
-	require.NoError(t, r.Delete(t.Context(), job))
-	job.Annotations = map[string]string{podMonitorOptOutAnnotation: "disabled"}
-	job.UID = "replacement-job-uid"
-	job.ResourceVersion = ""
-	require.NoError(t, r.Create(t.Context(), job))
-	reconcilePodMonitor(t, r, cluster)
-	getTestPodMonitor(t, r, cluster)
+			// A replacement RayJob with the same name must not control the old cluster.
+			require.NoError(t, r.Delete(t.Context(), job))
+			job.Annotations = map[string]string{podMonitorOptOutAnnotation: "disabled"}
+			job.UID = "replacement-job-uid"
+			job.ResourceVersion = ""
+			require.NoError(t, r.Create(t.Context(), job))
+			reconcilePodMonitor(t, r, cluster)
+			getTestPodMonitor(t, r, cluster)
+		})
+	}
 }
 
 func TestPodMonitorRayJobInheritedOptOutCanBeRemoved(t *testing.T) {
@@ -311,6 +317,31 @@ func TestPodMonitorForeignObjectsArePreserved(t *testing.T) {
 	}
 }
 
+func TestPodMonitorRepairsBlockingOwnerReferences(t *testing.T) {
+	for _, mode := range []string{"enabled", "disabled", "terminating"} {
+		t.Run(mode, func(t *testing.T) {
+			cluster := podMonitorTestCluster()
+			cluster.Finalizers = []string{authenticationFinalizer}
+			r := newPodMonitorTestController(t, cluster)
+			monitor := desiredPodMonitor(cluster)
+			require.NoError(t, controllerutil.SetControllerReference(cluster, monitor, r.Scheme()))
+			monitor.Finalizers = []string{"ray.io/test-monitoring"}
+			require.NoError(t, r.Create(t.Context(), monitor))
+			switch mode {
+			case "disabled":
+				features.SetFeatureGateDuringTest(t, features.RayClusterPodMonitor, false)
+			case "terminating":
+				require.NoError(t, r.Delete(t.Context(), cluster))
+			}
+			reconcilePodMonitor(t, r, cluster)
+			stored := getTestPodMonitor(t, r, cluster)
+			assert.Equal(t, new(false), metav1.GetControllerOf(stored).BlockOwnerDeletion)
+			assert.Equal(t, monitor.Finalizers, stored.Finalizers)
+			assert.Equal(t, mode != "enabled", stored.DeletionTimestamp != nil)
+		})
+	}
+}
+
 func TestPodMonitorFailuresAreIsolatedAndRetried(t *testing.T) {
 	resource := schema.GroupResource{Group: monitoringv1.SchemeGroupVersion.Group, Resource: "podmonitors"}
 	for _, operation := range []string{"get-forbidden", "get-no-match", "create-forbidden", "create-no-crd", "create-webhook", "update", "delete", "rayjob-get"} {
@@ -334,6 +365,7 @@ func TestPodMonitorFailuresAreIsolatedAndRetried(t *testing.T) {
 			}
 			base := r.Client.(client.WithWatch)
 			denied := errors.NewForbidden(resource, cluster.Name+"-podmonitor", fmt.Errorf("injected permission failure"))
+			createCalls := 0
 			faulty := interceptor.NewClient(base, interceptor.Funcs{
 				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 					if _, ok := obj.(*rayv1.RayJob); ok && operation == "rayjob-get" {
@@ -350,6 +382,7 @@ func TestPodMonitorFailuresAreIsolatedAndRetried(t *testing.T) {
 					return c.Get(ctx, key, obj, opts...)
 				},
 				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					createCalls++
 					switch operation {
 					case "create-forbidden":
 						return denied
@@ -366,6 +399,9 @@ func TestPodMonitorFailuresAreIsolatedAndRetried(t *testing.T) {
 			})
 			r.Client, r.APIReader = faulty, faulty
 			assert.Equal(t, podMonitorRequeueInterval, reconcilePodMonitor(t, r, cluster).RequeueAfter)
+			if operation == "get-forbidden" || operation == "rayjob-get" {
+				assert.Zero(t, createCalls, "failed lookups must not create a PodMonitor")
+			}
 			stored := &rayv1.RayCluster{}
 			require.NoError(t, base.Get(t.Context(), client.ObjectKeyFromObject(cluster), stored))
 			assert.Equal(t, rayv1.Ready, stored.Status.State)

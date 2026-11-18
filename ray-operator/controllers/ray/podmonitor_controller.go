@@ -70,6 +70,7 @@ func (r *PodMonitorController) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	// Periodic reconciliation repairs drift, observes RayJob annotation changes and
 	// recovers when monitoring is installed later, without an optional-CRD watch.
+	// shortcut: missing-API discovery is per cluster; share backoff if API load warrants it.
 	return ctrl.Result{RequeueAfter: podMonitorRequeueInterval}, nil
 }
 
@@ -100,7 +101,7 @@ func (r *PodMonitorController) reconcilePodMonitor(ctx context.Context, cluster 
 			return nil
 		}
 		desired := desiredPodMonitor(cluster)
-		if err := controllerutil.SetControllerReference(cluster, desired, r.Scheme()); err != nil {
+		if err := controllerutil.SetControllerReference(cluster, desired, r.Scheme(), controllerutil.WithBlockOwnerDeletion(false)); err != nil {
 			return err
 		}
 		return r.Create(ctx, desired)
@@ -113,6 +114,13 @@ func (r *PodMonitorController) reconcilePodMonitor(ctx context.Context, cluster 
 		ctrl.LoggerFrom(ctx).Info(message)
 		r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning, "PodMonitorOwnershipConflict", string(utils.ReconcileAction), "%s", message)
 		return nil
+	}
+	// Optional monitoring must not hold up foreground RayCluster deletion.
+	if owner := metav1.GetControllerOfNoCopy(monitor); ptr.Deref(owner.BlockOwnerDeletion, false) {
+		owner.BlockOwnerDeletion = new(false)
+		if err := r.Update(ctx, monitor); err != nil {
+			return err
+		}
 	}
 	if disabled {
 		// Preconditions prevent deleting a replacement object created after our read.
@@ -173,7 +181,8 @@ func desiredPodMonitor(cluster *rayv1.RayCluster) *monitoringv1.PodMonitor {
 
 func podMonitorRayJobOwner(cluster *rayv1.RayCluster) *metav1.OwnerReference {
 	owner := metav1.GetControllerOf(cluster)
-	if owner != nil && owner.APIVersion == rayv1.GroupVersion.String() && owner.Kind == "RayJob" {
+	if owner != nil && owner.Kind == "RayJob" &&
+		(owner.APIVersion == rayv1.GroupVersion.String() || owner.APIVersion == "ray.io/v1alpha1") {
 		return owner
 	}
 	return nil
