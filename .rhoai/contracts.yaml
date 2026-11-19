@@ -1,0 +1,74 @@
+# API contract descriptor for red-hat-data-services/api-contract-tests (RHOAIENG-103190).
+# Read by .github/workflows/api-contract.yml.
+apiVersion: contracts.rhoai.io/v1alpha1
+kind: ContractSet
+metadata:
+  name: kuberay
+spec:
+  baseline:
+    refs:
+      - 560baadd3a5c4268e6c021f6cfe36591a7b2551e # tag v1.6.2 (OpenAPI default baseline)
+  exclusions:
+    - path: proto/swagger/error.swagger.json
+      reason: Definitions only (shared error schema); no HTTP paths, not a provider API contract
+  contracts:
+    - id: kuberay-api
+      type: openapi
+      declaredArtifact: proto/kuberay_api.swagger.json
+      matchPath: "^/apis/v1(/|$)"
+      policy:
+        oasdiffVersion: "1.33.0"
+        yqVersion: "4.45.1"
+      generator:
+        adapter: openapi.static
+        source: proto/kuberay_api.swagger.json
+    - id: kuberay-cluster
+      type: openapi
+      declaredArtifact: proto/swagger/cluster.swagger.json
+      matchPath: "^/apis/v1(/|$)"
+      policy:
+        oasdiffVersion: "1.33.0"
+        yqVersion: "4.45.1"
+      generator:
+        adapter: openapi.static
+        source: proto/swagger/cluster.swagger.json
+    - id: kuberay-config
+      type: openapi
+      declaredArtifact: proto/swagger/config.swagger.json
+      matchPath: "^/apis/v1(/|$)"
+      policy:
+        oasdiffVersion: "1.33.0"
+        yqVersion: "4.45.1"
+      generator:
+        adapter: openapi.static
+        source: proto/swagger/config.swagger.json
+    - id: kuberay-job
+      type: openapi
+      declaredArtifact: proto/swagger/job.swagger.json
+      matchPath: "^/apis/v1(/|$)"
+      policy:
+        oasdiffVersion: "1.33.0"
+        yqVersion: "4.45.1"
+      generator:
+        adapter: openapi.static
+        source: proto/swagger/job.swagger.json
+    - id: kuberay-job-submission
+      type: openapi
+      declaredArtifact: proto/swagger/job_submission.swagger.json
+      matchPath: "^/apis/v1(/|$)"
+      policy:
+        oasdiffVersion: "1.33.0"
+        yqVersion: "4.45.1"
+      generator:
+        adapter: openapi.static
+        source: proto/swagger/job_submission.swagger.json
+    - id: kuberay-serve
+      type: openapi
+      declaredArtifact: proto/swagger/serve.swagger.json
+      matchPath: "^/apis/v1(/|$)"
+      policy:
+        oasdiffVersion: "1.33.0"
+        yqVersion: "4.45.1"
+      generator:
+        adapter: openapi.static
+        source: proto/swagger/serve.swagger.json

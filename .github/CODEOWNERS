@@ -4,6 +4,11 @@
 # It uses the same pattern rule for gitignore file,
 # see https://git-scm.com/docs/gitignore#_pattern_format.
 
+# ==== API contract gates (RHOAIENG-103190) ====
+/.rhoai/ @pawelpaszki @chipspeak @szaher @CathalOConnorRH
+/.github/workflows/api-contract.yml @pawelpaszki @chipspeak @szaher @CathalOConnorRH
+/docs/api-contract-checks.md @pawelpaszki @chipspeak @szaher @CathalOConnorRH
+
 # ==== CRD ====
 # For API changes, please make sure the stake holders are aware of the changes.
 /ray-operator/apis/ @kevin85421 @andrewsykim @rueian
