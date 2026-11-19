@@ -39,7 +39,7 @@ func TestRayJobWithClusterSelector(t *testing.T) {
 		Should(WithTransform(RayClusterState, Equal(rayv1.Ready)))
 
 	test.T().Run("Successful RayJob", func(t *testing.T) {
-		// t.Parallel()
+		t.Parallel()
 
 		// RayJob
 		rayJobAC := rayv1ac.RayJob("counter", namespace.Name).
@@ -66,7 +66,7 @@ env_vars:
 	})
 
 	test.T().Run("Failing RayJob", func(t *testing.T) {
-		// t.Parallel()
+		t.Parallel()
 
 		// RayJob
 		rayJobAC := rayv1ac.RayJob("fail", namespace.Name).
@@ -90,7 +90,7 @@ env_vars:
 	})
 
 	test.T().Run("RayJob should be created but not to be updated when managed externally", func(_ *testing.T) {
-		// // // t.Parallel()
+		// // t.Parallel()
 
 		// RayJob
 		rayJobAC := rayv1ac.RayJob("managed-externally", namespace.Name).
