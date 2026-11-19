@@ -166,7 +166,28 @@ func SetupPortForward(t Test, podName, namespace string, localPort, remotePort i
 	return stopChan, nil
 }
 
+func restrictedCurlPodSecurityContext() (*corev1.PodSecurityContext, *corev1.SecurityContext) {
+	allowPrivilegeEscalation := false
+	runAsNonRoot := true
+	runAsUser := int64(1000)
+	seccomp := corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
+	podSecurityContext := &corev1.PodSecurityContext{
+		SeccompProfile: &seccomp,
+	}
+	containerSecurityContext := &corev1.SecurityContext{
+		AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+		Capabilities: &corev1.Capabilities{
+			Drop: []corev1.Capability{"ALL"},
+		},
+		RunAsNonRoot:   &runAsNonRoot,
+		RunAsUser:      &runAsUser,
+		SeccompProfile: &seccomp,
+	}
+	return podSecurityContext, containerSecurityContext
+}
+
 func CreateCurlPod(g *gomega.WithT, t Test, podName, containerName, namespace string) (*corev1.Pod, error) {
+	podSecurityContext, containerSecurityContext := restrictedCurlPodSecurityContext()
 	// Define the podSpec spec
 	podSpec := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -174,11 +195,13 @@ func CreateCurlPod(g *gomega.WithT, t Test, podName, containerName, namespace st
 			Namespace: namespace,
 		},
 		Spec: corev1.PodSpec{
+			SecurityContext: podSecurityContext,
 			Containers: []corev1.Container{
 				{
-					Name:    containerName,
-					Image:   "rancher/curl",
-					Command: []string{"/bin/sh", "-c", "tail -f /dev/null"},
+					Name:            containerName,
+					Image:           "rancher/curl",
+					Command:         []string{"/bin/sh", "-c", "tail -f /dev/null"},
+					SecurityContext: containerSecurityContext,
 				},
 			},
 		},
