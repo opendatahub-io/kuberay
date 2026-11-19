@@ -30,7 +30,7 @@ COPY html/ html/
 RUN mkdir -p output/bin && \
     CGO_ENABLED=1 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} GOEXPERIMENT=strictfipsruntime \
     go build -tags strictfipsruntime \
-      -ldflags="-X github.com/ray-project/kuberay/historyserver/pkg.CommitID=${COMMIT_SHA1}" \
+      -ldflags="-X main.commitID=${COMMIT_SHA1}" \
       -a -o output/bin/historyserver ./cmd/historyserver/main.go
 
 FROM ${RUNTIME_IMAGE}

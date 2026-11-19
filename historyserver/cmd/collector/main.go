@@ -25,6 +25,10 @@ import (
 
 const defaultDashboardAddress = "http://localhost:8265"
 
+var (
+	commitID = "unknown" // set at link time via -ldflags (Konflux / RHOAI)
+)
+
 func main() {
 	role := ""
 	storageBackend := ""
@@ -70,6 +74,7 @@ func main() {
 	flag.BoolVar(&eventCompressionEnabled, "event-compression-enabled", eventCompressionEnabled, "Enable gzip compression when uploading rotated JSONL files to remote storage (false uploads plain JSONL)")
 
 	flag.Parse()
+	logrus.Infof("starting collector (gitSHA=%s)", commitID)
 
 	if val := os.Getenv("RAY_CLUSTER_NAME"); val != "" {
 		rayClusterName = val
