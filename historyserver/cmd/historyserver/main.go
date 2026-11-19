@@ -17,6 +17,10 @@ import (
 	"github.com/ray-project/kuberay/historyserver/pkg/historyserver"
 )
 
+var (
+	commitID = "unknown" // set at link time via -ldflags (Konflux / RHOAI)
+)
+
 func main() {
 	storageBackend := ""
 	storageRootDir := ""
@@ -47,6 +51,7 @@ func main() {
 	flag.StringVar(&sessionCacheMaxMemory, "session-cache-max-memory", historyserver.DefaultSessionCacheMaxMemory, `Soft cap on memory held by cached snapshots, as a Kubernetes quantity (e.g. "1Gi"); tune under pod memory. "0" disables the bound.`)
 	flag.DurationVar(&sessionCacheTTL, "session-cache-ttl", historyserver.DefaultSessionCacheTTL, "How long a dead-session snapshot stays cached after last access. 0 disables TTL.")
 	flag.Parse()
+	logrus.Infof("starting history server (gitSHA=%s)", commitID)
 
 	if val := os.Getenv("STORAGE_BACKEND"); val != "" {
 		storageBackend = val
