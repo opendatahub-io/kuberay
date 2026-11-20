@@ -15,12 +15,15 @@ import (
 	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 	"github.com/ray-project/kuberay/ray-operator/controllers/ray/utils"
@@ -78,7 +81,7 @@ func (r *PodMonitorController) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 		logger.Error(err, "Unable to reconcile PodMonitor; RayCluster reconciliation is unaffected")
 		r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning, "PodMonitorReconcileFailed", string(utils.ReconcileAction), "%s", err)
-		return ctrl.Result{RequeueAfter: podMonitorRetryInterval}, nil
+		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
 }
@@ -252,9 +255,23 @@ func (r *PodMonitorController) setupController(ctx context.Context, mgr ctrl.Man
 		Named("podmonitor").
 		For(&rayv1.RayCluster{}).
 		Owns(&monitoringv1.PodMonitor{}).
-		Watches(&rayv1.RayJob{}, handler.EnqueueRequestsFromMapFunc(r.rayJobClusters)).
+		Watches(&rayv1.RayJob{}, handler.EnqueueRequestsFromMapFunc(r.rayJobClusters), builder.WithPredicates(podMonitorRayJobPredicate())).
 		WithOptions(controller.Options{MaxConcurrentReconciles: reconcileConcurrency}).
 		Complete(r)
+}
+
+// Keep lifecycle events; status and unrelated metadata updates do not affect monitoring.
+func podMonitorRayJobPredicate() predicate.Funcs {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if e.ObjectOld == nil || e.ObjectNew == nil {
+				return false
+			}
+			return e.ObjectOld.GetUID() != e.ObjectNew.GetUID() ||
+				e.ObjectOld.GetAnnotations()[podMonitorOptOutAnnotation] != e.ObjectNew.GetAnnotations()[podMonitorOptOutAnnotation]
+		},
+		GenericFunc: func(event.GenericEvent) bool { return false },
+	}
 }
 
 func podMonitorRayJobIndexValues(obj client.Object) []string {
