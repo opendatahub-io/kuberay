@@ -18,12 +18,17 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 	"github.com/ray-project/kuberay/ray-operator/controllers/ray/utils"
@@ -401,11 +406,7 @@ func TestPodMonitorFailuresAreIsolatedAndRetried(t *testing.T) {
 			})
 			r.Client = faulty
 			result := reconcilePodMonitor(t, r, cluster)
-			if operation == "get-no-match" || operation == "create-no-crd" {
-				assert.Empty(t, result)
-			} else {
-				assert.Equal(t, podMonitorRetryInterval, result.RequeueAfter)
-			}
+			assert.Equal(t, podMonitorRetryInterval, result.RequeueAfter)
 			if operation == "get-forbidden" || operation == "rayjob-get" {
 				assert.Zero(t, createCalls, "failed lookups must not create a PodMonitor")
 			}
@@ -516,4 +517,93 @@ func TestPodMonitorTaskRetriesWithoutFailingManager(t *testing.T) {
 		require.Equal(t, int32(2), calls.Load())
 		require.NoError(t, <-done)
 	})
+}
+
+func TestPodMonitorScheduledRetryAfterAPIRestored(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cluster := podMonitorTestCluster()
+		r := newPodMonitorTestController(t, cluster)
+		available := &atomic.Bool{}
+		attempts := &atomic.Int32{}
+		base := r.Client.(client.WithWatch)
+		r.Client = interceptor.NewClient(base, interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				attempts.Add(1)
+				if !available.Load() {
+					return errors.NewNotFound(monitoringv1.Resource("podmonitors"), "")
+				}
+				return c.Create(ctx, obj, opts...)
+			},
+		})
+		worker, err := controller.NewUnmanaged("podmonitor-api-recovery", controller.Options{Reconciler: r, SkipNameValidation: new(true)})
+		require.NoError(t, err)
+		changes := make(chan event.GenericEvent, 1)
+		require.NoError(t, worker.Watch(source.Channel(changes, &handler.EnqueueRequestForObject{})))
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- worker.Start(ctx) }()
+		changes <- event.GenericEvent{Object: cluster}
+		synctest.Wait()
+		require.Equal(t, int32(1), attempts.Load())
+		assert.Empty(t, r.Recorder.(*events.FakeRecorder).Events)
+		available.Store(true)
+		time.Sleep(podMonitorRetryInterval)
+		synctest.Wait()
+		getTestPodMonitor(t, r, cluster)
+		require.Equal(t, int32(2), attempts.Load(), "recovery must use the scheduled retry without another workload event")
+		cancel()
+		require.NoError(t, <-done)
+	})
+}
+
+func TestPodMonitorCleanupPreservesFailuresAcrossMissingObjects(t *testing.T) {
+	for _, apiMissing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("api-missing=%t", apiMissing), func(t *testing.T) {
+			clusters := make([]*rayv1.RayCluster, 0, 3)
+			for _, name := range []string{"a-denied", "b-disappearing", "c-healthy"} {
+				cluster := podMonitorTestCluster()
+				cluster.Name, cluster.UID = name, types.UID(name)
+				clusters = append(clusters, cluster)
+			}
+			r := newPodMonitorTestController(t, clusters[0], clusters[1], clusters[2])
+			for _, cluster := range clusters {
+				reconcilePodMonitor(t, r, cluster)
+			}
+			monitor := getTestPodMonitor(t, r, clusters[1])
+			metav1.GetControllerOfNoCopy(monitor).BlockOwnerDeletion = new(true)
+			require.NoError(t, r.Update(t.Context(), monitor))
+			base := r.Client.(client.WithWatch)
+			r.cleanupOnly = true
+			r.Client = interceptor.NewClient(base, interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if _, ok := obj.(*monitoringv1.PodMonitor); ok && apiMissing && key.Name == monitor.Name {
+						return &meta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "monitoring.coreos.com", Kind: "PodMonitor"}}
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+				Update: func(ctx context.Context, c client.WithWatch, obj client.Object, _ ...client.UpdateOption) error {
+					require.Equal(t, monitor.Name, obj.GetName())
+					if err := c.Delete(ctx, obj); err != nil {
+						return err
+					}
+					return errors.NewNotFound(monitoringv1.Resource("podmonitors"), obj.GetName())
+				},
+				Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+					if obj.GetName() == "a-denied-podmonitor" {
+						return errors.NewForbidden(monitoringv1.Resource("podmonitors"), obj.GetName(), fmt.Errorf("denied"))
+					}
+					return c.Delete(ctx, obj, opts...)
+				},
+			})
+			cleanup := &podMonitorCleanup{PodMonitorController: r, clusters: base}
+			require.True(t, errors.IsForbidden(cleanup.cleanup(t.Context())), "a missing object or API must not erase earlier failures")
+			err := base.Get(t.Context(), client.ObjectKey{Namespace: "default", Name: "c-healthy-podmonitor"}, &monitoringv1.PodMonitor{})
+			if apiMissing {
+				require.NoError(t, err)
+			} else {
+				require.True(t, errors.IsNotFound(err), "a concurrent monitor deletion must not stop cleanup")
+			}
+		})
+	}
 }
