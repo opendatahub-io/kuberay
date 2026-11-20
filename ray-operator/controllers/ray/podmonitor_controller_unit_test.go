@@ -405,8 +405,19 @@ func TestPodMonitorFailuresAreIsolatedAndRetried(t *testing.T) {
 				Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error { return denied },
 			})
 			r.Client = faulty
-			result := reconcilePodMonitor(t, r, cluster)
-			assert.Equal(t, podMonitorRetryInterval, result.RequeueAfter)
+			result, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
+			if operation == "get-no-match" || operation == "create-no-crd" {
+				require.NoError(t, err)
+				assert.Equal(t, podMonitorRetryInterval, result.RequeueAfter)
+			} else {
+				require.Error(t, err)
+				assert.Empty(t, result, "controller-runtime must control backoff after a failure")
+				if operation == "create-webhook" {
+					assert.True(t, errors.IsInternalError(err))
+				} else {
+					assert.True(t, errors.IsForbidden(err))
+				}
+			}
 			if operation == "get-forbidden" || operation == "rayjob-get" {
 				assert.Zero(t, createCalls, "failed lookups must not create a PodMonitor")
 			}
@@ -606,4 +617,41 @@ func TestPodMonitorCleanupPreservesFailuresAcrossMissingObjects(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPodMonitorRayJobPredicate(t *testing.T) {
+	p := podMonitorRayJobPredicate()
+	job := &rayv1.RayJob{ObjectMeta: metav1.ObjectMeta{Name: "train", Namespace: "default", UID: "job-uid"}}
+	for _, tc := range []struct {
+		name     string
+		oldValue string
+		change   func(*rayv1.RayJob)
+		want     bool
+	}{
+		{name: "status", change: func(job *rayv1.RayJob) { job.Status.JobDeploymentStatus = rayv1.JobDeploymentStatusRunning }},
+		{name: "spec", change: func(job *rayv1.RayJob) { job.Spec.Suspend = true }},
+		{name: "labels", change: func(job *rayv1.RayJob) { job.Labels = map[string]string{"team": "training"} }},
+		{name: "unrelated-annotation", change: func(job *rayv1.RayJob) { job.Annotations["other"] = "changed" }},
+		{name: "unchanged-opt-out", oldValue: "disabled", change: func(job *rayv1.RayJob) { job.Annotations["other"] = "changed" }},
+		{name: "add-opt-out", change: func(job *rayv1.RayJob) { job.Annotations[podMonitorOptOutAnnotation] = "disabled" }, want: true},
+		{name: "remove-opt-out", oldValue: "disabled", change: func(job *rayv1.RayJob) { delete(job.Annotations, podMonitorOptOutAnnotation) }, want: true},
+		{name: "changed-value", oldValue: "true", change: func(job *rayv1.RayJob) { job.Annotations[podMonitorOptOutAnnotation] = "disabled" }, want: true},
+		{name: "replacement-owner", change: func(job *rayv1.RayJob) { job.UID = "replacement-job-uid" }, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := job.DeepCopy()
+			before.Annotations = map[string]string{}
+			if tc.oldValue != "" {
+				before.Annotations[podMonitorOptOutAnnotation] = tc.oldValue
+			}
+			after := before.DeepCopy()
+			tc.change(after)
+			assert.Equal(t, tc.want, p.Update(event.UpdateEvent{ObjectOld: before, ObjectNew: after}))
+		})
+	}
+	assert.True(t, p.Create(event.CreateEvent{Object: job}))
+	assert.True(t, p.Delete(event.DeleteEvent{Object: job}))
+	assert.False(t, p.Generic(event.GenericEvent{Object: job}))
+	assert.False(t, p.Update(event.UpdateEvent{ObjectOld: nil, ObjectNew: job}))
+	assert.False(t, p.Update(event.UpdateEvent{ObjectOld: job, ObjectNew: nil}))
 }
