@@ -74,7 +74,7 @@ func (r *PodMonitorController) Reconcile(ctx context.Context, req ctrl.Request) 
 		logger := ctrl.LoggerFrom(ctx)
 		if meta.IsNoMatchError(err) || errors.IsNotFound(err) {
 			logger.V(1).Info("PodMonitor API is unavailable; skipping monitoring", "error", err)
-			return ctrl.Result{}, nil
+			return ctrl.Result{RequeueAfter: podMonitorRetryInterval}, nil
 		}
 		logger.Error(err, "Unable to reconcile PodMonitor; RayCluster reconciliation is unaffected")
 		r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning, "PodMonitorReconcileFailed", string(utils.ReconcileAction), "%s", err)
@@ -331,11 +331,11 @@ func (r *podMonitorCleanup) cleanup(ctx context.Context) error {
 			continue
 		}
 		if err := r.reconcilePodMonitor(ctx, &cluster); err != nil {
-			if errors.IsAlreadyExists(err) {
+			if errors.IsAlreadyExists(err) || errors.IsNotFound(err) {
 				continue
 			}
-			if meta.IsNoMatchError(err) || errors.IsNotFound(err) {
-				return nil
+			if meta.IsNoMatchError(err) {
+				return stderrors.Join(failures...)
 			}
 			r.Recorder.Eventf(&cluster, nil, corev1.EventTypeWarning, "PodMonitorReconcileFailed", string(utils.ReconcileAction), "%s", err)
 			failures = append(failures, err)
