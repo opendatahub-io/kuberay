@@ -386,24 +386,3 @@ make test WHAT='./apis/config/v1alpha1 ./controllers/ray/batchscheduler/... ./co
 # E2E tests. Requires the kind cluster above with the operator deployed.
 make test-e2e-kubernetes-was-v1alpha2
 ```
-
-## Downstream RayCluster PodMonitors
-
-The OpenShift overlay enables `RayClusterPodMonitor`: one owned PodMonitor per eligible
-RayCluster (including RayService-created clusters), scraping head/worker Pods on the named
-`metrics` port for user-workload monitoring (UWM).
-Custom `metrics-export-port` values require a matching explicitly declared `metrics`
-container port in each affected head or worker Pod template.
-
-* Set `odh.ray.io/cluster-podmonitor: disabled` under `metadata.annotations` on a standalone
-  RayCluster or its owning RayJob to opt out; remove it to resume. The live RayJob value
-  controls its owned clusters.
-* Set `--feature-gates=RayClusterPodMonitor=false` to remove owned monitors in watched namespaces.
-  Keep affected namespaces watched until cleanup completes. Terminating clusters also use
-  delete-only mode; foreign monitors are preserved.
-* Creating a PodMonitor does not grant network ingress. With `DenyAllIngress`, head and worker
-  policies must allow UWM to reach the metrics port; this is tracked in RHAI-23207.
-* Missing monitoring APIs are skipped; monitoring failures do not block workloads.
-  PodMonitors use `monitoring.opendatahub.io/scrape: "false"` to exclude the RHOAI MonitoringStack.
-* Run controller tests with `make test WHAT=./controllers/ray` from `ray-operator/`.
-  Live UWM/upgrade validation and metrics NetworkPolicy ingress remain companion work.

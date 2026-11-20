@@ -399,9 +399,14 @@ func main() {
 		setupLog.Info("NetworkPolicy controller registered")
 	}
 
-	// CARRY: RHAI-23206 - register even when disabled, so existing PodMonitors are cleaned up.
-	exitOnError(ray.NewPodMonitorController(mgr).SetupWithManager(mgr, config.ReconcileConcurrency),
-		"unable to create controller", "controller", "PodMonitor")
+	// CARRY: RHAI-23206 - disabled rollouts clean up without running the monitoring controller.
+	podMonitorController := ray.NewPodMonitorController(mgr)
+	if features.Enabled(features.RayClusterPodMonitor) {
+		exitOnError(podMonitorController.SetupWithManager(mgr, config.ReconcileConcurrency, strings.Split(config.WatchNamespace, ",")...),
+			"unable to create controller", "controller", "PodMonitor")
+	} else {
+		exitOnError(podMonitorController.CleanupWithManager(mgr), "unable to set up PodMonitor cleanup")
+	}
 
 	if isOpenShift && features.Enabled(features.RayClusterMTLS) && features.Enabled(features.RayClusterNetworkPolicy) {
 		legacySecurityController := ray.NewLegacySecurityController(mgr, isOpenShift)

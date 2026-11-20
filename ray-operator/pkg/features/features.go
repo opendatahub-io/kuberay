@@ -80,10 +80,6 @@ const (
 	// Enables mTLS (spec.tlsOptions) for RayClusters via cert-manager.
 	RayClusterMTLS featuregate.Feature = "RayClusterMTLS"
 
-	// CARRY: RHAI-23206 - OpenShift enables automatic per-RayCluster PodMonitors.
-	// Disabling this gate keeps the controller running to remove owned monitors.
-	RayClusterPodMonitor featuregate.Feature = "RayClusterPodMonitor"
-
 	// owner: @chiayi @Future-Outlier
 	// rep: N/A
 	// alpha: v1.7
@@ -100,6 +96,10 @@ const (
 	// selects the scheduler; it is mutually exclusive with --batch-scheduler and --enable-batch-scheduler.
 	// Requires a Kubernetes cluster that serves the scheduling.k8s.io API with GenericWorkload enabled.
 	KubernetesWAS featuregate.Feature = "KubernetesWAS"
+
+	// CARRY: RHAI-23206 - OpenShift enables automatic per-RayCluster PodMonitors.
+	// Disabled rollouts remove owned monitors with a separate startup cleanup.
+	RayClusterPodMonitor featuregate.Feature = "RayClusterPodMonitor"
 )
 
 func init() {
@@ -116,9 +116,9 @@ var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 	RayClusterNetworkPolicy:          {Default: false, PreRelease: featuregate.Alpha},
 	GCSFaultToleranceEmbeddedStorage: {Default: false, PreRelease: featuregate.Alpha},
 	RayClusterMTLS:                   {Default: false, PreRelease: featuregate.Alpha},
-	RayClusterPodMonitor:             {Default: false, PreRelease: featuregate.Alpha}, // CARRY: RHAI-23206; enabled in the OpenShift overlay.
 	RayClusterHistoryServer:          {Default: false, PreRelease: featuregate.Alpha},
 	KubernetesWAS:                    {Default: false, PreRelease: featuregate.Alpha},
+	RayClusterPodMonitor:             {Default: false, PreRelease: featuregate.Alpha}, // CARRY: RHAI-23206; enabled in the OpenShift overlay.
 }
 
 // SetFeatureGateDuringTest is a helper method to override feature gates in tests.

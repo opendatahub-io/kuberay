@@ -350,7 +350,9 @@ rules:
   - create
   - delete
   - get
+  - list
   - update
+  - watch
 - apiGroups:
   - networking.k8s.io
   resources:

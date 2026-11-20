@@ -3,7 +3,10 @@ package ray
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	"github.com/stretchr/testify/assert"
@@ -24,7 +27,6 @@ import (
 
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 	"github.com/ray-project/kuberay/ray-operator/controllers/ray/utils"
-	"github.com/ray-project/kuberay/ray-operator/pkg/features"
 )
 
 func podMonitorTestCluster() *rayv1.RayCluster {
@@ -35,14 +37,14 @@ func podMonitorTestCluster() *rayv1.RayCluster {
 
 func newPodMonitorTestController(t *testing.T, objects ...client.Object) *PodMonitorController {
 	t.Helper()
-	features.SetFeatureGateDuringTest(t, features.RayClusterPodMonitor, true)
 	s := runtime.NewScheme()
 	require.NoError(t, corev1.AddToScheme(s))
 	require.NoError(t, rayv1.AddToScheme(s))
 	require.NoError(t, monitoringv1.AddToScheme(s))
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objects...).
-		WithStatusSubresource(&rayv1.RayCluster{}, &rayv1.RayJob{}).Build()
-	return &PodMonitorController{Client: c, APIReader: c, Recorder: events.NewFakeRecorder(32)}
+		WithStatusSubresource(&rayv1.RayCluster{}, &rayv1.RayJob{}).
+		WithIndex(&rayv1.RayCluster{}, podMonitorRayJobIndex, podMonitorRayJobIndexValues).Build()
+	return &PodMonitorController{Client: c, Recorder: events.NewFakeRecorder(32)}
 }
 
 func reconcilePodMonitor(t *testing.T, r *PodMonitorController, cluster *rayv1.RayCluster) ctrl.Result {
@@ -55,7 +57,7 @@ func reconcilePodMonitor(t *testing.T, r *PodMonitorController, cluster *rayv1.R
 func getTestPodMonitor(t *testing.T, r *PodMonitorController, cluster *rayv1.RayCluster) *monitoringv1.PodMonitor {
 	t.Helper()
 	monitor := &monitoringv1.PodMonitor{}
-	require.NoError(t, r.APIReader.Get(t.Context(), client.ObjectKey{
+	require.NoError(t, r.Get(t.Context(), client.ObjectKey{
 		Namespace: cluster.Namespace, Name: cluster.Name + "-podmonitor",
 	}, monitor))
 	return monitor
@@ -74,7 +76,7 @@ func requirePodMonitorEvent(t *testing.T, r *PodMonitorController, reason string
 func TestPodMonitorCreationAndDrift(t *testing.T) {
 	cluster := podMonitorTestCluster()
 	r := newPodMonitorTestController(t, cluster)
-	assert.Equal(t, podMonitorRequeueInterval, reconcilePodMonitor(t, r, cluster).RequeueAfter)
+	assert.Empty(t, reconcilePodMonitor(t, r, cluster))
 	monitor := getTestPodMonitor(t, r, cluster)
 	assert.True(t, metav1.IsControlledBy(monitor, cluster))
 	assert.Equal(t, new(false), metav1.GetControllerOf(monitor).BlockOwnerDeletion)
@@ -176,12 +178,12 @@ func TestPodMonitorOptOutAndGateTogglesLeaveWorkloadsUnchanged(t *testing.T) {
 	require.NoError(t, r.Update(t.Context(), cluster))
 	reconcilePodMonitor(t, r, cluster)
 	getTestPodMonitor(t, r, cluster)
-	features.SetFeatureGateDuringTest(t, features.RayClusterPodMonitor, false)
+	r.cleanupOnly = true
 	reconcilePodMonitor(t, r, cluster)
 	reconcilePodMonitor(t, r, cluster)
 	require.NoError(t, r.List(t.Context(), monitors))
 	assert.Empty(t, monitors.Items)
-	features.SetFeatureGateDuringTest(t, features.RayClusterPodMonitor, true)
+	r.cleanupOnly = false
 	reconcilePodMonitor(t, r, cluster)
 	getTestPodMonitor(t, r, cluster)
 	currentCluster := &rayv1.RayCluster{}
@@ -200,7 +202,7 @@ func TestPodMonitorTerminatingClustersAreDeleteOnly(t *testing.T) {
 				cluster := podMonitorTestCluster()
 				cluster.Finalizers = []string{authenticationFinalizer}
 				r := newPodMonitorTestController(t, cluster)
-				features.SetFeatureGateDuringTest(t, features.RayClusterPodMonitor, enabled)
+				r.cleanupOnly = !enabled
 				if ownership != "absent" {
 					monitor := desiredPodMonitor(cluster)
 					if ownership == "owned" {
@@ -296,7 +298,7 @@ func TestPodMonitorForeignObjectsArePreserved(t *testing.T) {
 			t.Run(fmt.Sprintf("disabled=%t/owner=%s", disabled, owner), func(t *testing.T) {
 				cluster := podMonitorTestCluster()
 				r := newPodMonitorTestController(t, cluster)
-				features.SetFeatureGateDuringTest(t, features.RayClusterPodMonitor, !disabled)
+				r.cleanupOnly = disabled
 				foreign := desiredPodMonitor(cluster)
 				if owner != "none" {
 					foreign.OwnerReferences = []metav1.OwnerReference{{
@@ -309,7 +311,7 @@ func TestPodMonitorForeignObjectsArePreserved(t *testing.T) {
 				}
 				require.NoError(t, r.Create(t.Context(), foreign))
 				before := getTestPodMonitor(t, r, cluster)
-				reconcilePodMonitor(t, r, cluster)
+				assert.Equal(t, podMonitorRetryInterval, reconcilePodMonitor(t, r, cluster).RequeueAfter)
 				assert.Equal(t, before, getTestPodMonitor(t, r, cluster))
 				requirePodMonitorEvent(t, r, "PodMonitorOwnershipConflict")
 			})
@@ -329,7 +331,7 @@ func TestPodMonitorRepairsBlockingOwnerReferences(t *testing.T) {
 			require.NoError(t, r.Create(t.Context(), monitor))
 			switch mode {
 			case "disabled":
-				features.SetFeatureGateDuringTest(t, features.RayClusterPodMonitor, false)
+				r.cleanupOnly = true
 			case "terminating":
 				require.NoError(t, r.Delete(t.Context(), cluster))
 			}
@@ -361,7 +363,7 @@ func TestPodMonitorFailuresAreIsolatedAndRetried(t *testing.T) {
 				require.NoError(t, r.Update(t.Context(), monitor))
 			}
 			if operation == "delete" {
-				features.SetFeatureGateDuringTest(t, features.RayClusterPodMonitor, false)
+				r.cleanupOnly = true
 			}
 			base := r.Client.(client.WithWatch)
 			denied := errors.NewForbidden(resource, cluster.Name+"-podmonitor", fmt.Errorf("injected permission failure"))
@@ -397,8 +399,13 @@ func TestPodMonitorFailuresAreIsolatedAndRetried(t *testing.T) {
 				Update: func(context.Context, client.WithWatch, client.Object, ...client.UpdateOption) error { return denied },
 				Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error { return denied },
 			})
-			r.Client, r.APIReader = faulty, faulty
-			assert.Equal(t, podMonitorRequeueInterval, reconcilePodMonitor(t, r, cluster).RequeueAfter)
+			r.Client = faulty
+			result := reconcilePodMonitor(t, r, cluster)
+			if operation == "get-no-match" || operation == "create-no-crd" {
+				assert.Empty(t, result)
+			} else {
+				assert.Equal(t, podMonitorRetryInterval, result.RequeueAfter)
+			}
 			if operation == "get-forbidden" || operation == "rayjob-get" {
 				assert.Zero(t, createCalls, "failed lookups must not create a PodMonitor")
 			}
@@ -411,7 +418,7 @@ func TestPodMonitorFailuresAreIsolatedAndRetried(t *testing.T) {
 				requirePodMonitorEvent(t, r, "PodMonitorReconcileFailed")
 			}
 			// The same controller must recover after the API/permissions/webhook recovers.
-			r.Client, r.APIReader = base, base
+			r.Client = base
 			reconcilePodMonitor(t, r, cluster)
 			if operation != "delete" {
 				assert.Equal(t, "false", getTestPodMonitor(t, r, cluster).Labels[podMonitorScrapeLabel])
@@ -435,4 +442,78 @@ func TestPodMonitorDeletedAndExternallyManagedClusters(t *testing.T) {
 	monitors := &monitoringv1.PodMonitorList{}
 	require.NoError(t, r.List(t.Context(), monitors))
 	assert.Empty(t, monitors.Items)
+}
+
+func TestPodMonitorRayJobEventMapping(t *testing.T) {
+	job := &rayv1.RayJob{ObjectMeta: metav1.ObjectMeta{Name: "train", Namespace: "default", UID: "job-uid"}}
+	cluster := podMonitorTestCluster()
+	r := newPodMonitorTestController(t)
+	require.NoError(t, controllerutil.SetControllerReference(job, cluster, r.Scheme()))
+	second := cluster.DeepCopy()
+	second.Name, second.UID = "second", "second-uid"
+	other := cluster.DeepCopy()
+	other.Name, other.UID = "other", "other-uid"
+	other.OwnerReferences[0].UID = "another-job-uid"
+	outside := cluster.DeepCopy()
+	outside.Namespace = "outside"
+	for _, obj := range []*rayv1.RayCluster{cluster, second, other, outside} {
+		require.NoError(t, r.Create(t.Context(), obj))
+	}
+	assert.ElementsMatch(t, []ctrl.Request{
+		{NamespacedName: client.ObjectKeyFromObject(cluster)},
+		{NamespacedName: client.ObjectKeyFromObject(second)},
+	}, r.rayJobClusters(t.Context(), job))
+}
+
+func TestPodMonitorCleanupFailureCanRecover(t *testing.T) {
+	cluster := podMonitorTestCluster()
+	cluster.Name = "a-blocked"
+	healthy := podMonitorTestCluster()
+	healthy.Name, healthy.UID = "b-healthy", "healthy-uid"
+	r := newPodMonitorTestController(t, cluster, healthy)
+	reconcilePodMonitor(t, r, cluster)
+	reconcilePodMonitor(t, r, healthy)
+	base := r.Client.(client.WithWatch)
+	r.cleanupOnly = true
+	r.Client = interceptor.NewClient(base, interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if obj.GetName() == cluster.Name+"-podmonitor" {
+				return errors.NewForbidden(monitoringv1.Resource("podmonitors"), cluster.Name, fmt.Errorf("denied"))
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	})
+	cleanup := &podMonitorCleanup{PodMonitorController: r, clusters: base}
+	require.True(t, errors.IsForbidden(cleanup.cleanup(t.Context())))
+	getTestPodMonitor(t, r, cluster)
+	assert.True(t, errors.IsNotFound(base.Get(t.Context(), client.ObjectKey{
+		Namespace: healthy.Namespace, Name: healthy.Name + "-podmonitor",
+	}, &monitoringv1.PodMonitor{})), "one rejected deletion must not block other clusters")
+	requirePodMonitorEvent(t, r, "PodMonitorReconcileFailed")
+	r.Client = base
+	require.NoError(t, cleanup.cleanup(t.Context()))
+	monitors := &monitoringv1.PodMonitorList{}
+	require.NoError(t, base.List(t.Context(), monitors))
+	assert.Empty(t, monitors.Items)
+}
+
+func TestPodMonitorTaskRetriesWithoutFailingManager(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		calls := &atomic.Int32{}
+		task := &podMonitorTask{run: func(context.Context) error {
+			if calls.Add(1) == 1 {
+				return fmt.Errorf("optional monitoring unavailable")
+			}
+			return nil
+		}}
+		require.True(t, task.NeedLeaderElection())
+		done := make(chan error, 1)
+		go func() { done <- task.Start(t.Context()) }()
+		synctest.Wait()
+		require.Equal(t, int32(1), calls.Load())
+		time.Sleep(podMonitorRetryInterval)
+		synctest.Wait()
+		require.Equal(t, int32(2), calls.Load())
+		require.NoError(t, <-done)
+	})
 }
