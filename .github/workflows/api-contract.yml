@@ -1,0 +1,65 @@
+# API contract compatibility checks (RHOAIENG-103190), from
+# red-hat-data-services/api-contract-tests. Compares the KubeRay APIServer
+# Swagger specs and ray.io CRDs in a pull request with an immutable baseline
+# commit and fails on breaking changes. Static only; no cluster required.
+#
+# OpenAPI contracts are in .rhoai/contracts.yaml (Swagger 2.0, converted in CI).
+# CRDs: ray-operator/config/crd/bases/*.yaml (canonical); Helm chart copies are
+# excluded from coverage (see api-contract-coverage).
+#
+# Reusable workflows pin @latest on api-contract-tests so new central releases
+# are picked up without a change here.
+#
+# Baselines (full SHAs; see RHOAIENG-103190):
+# - OpenAPI: 560baadd3a5c4268e6c021f6cfe36591a7b2551e (tag v1.6.2, newest GA).
+# - CRDs: b02c607ea69f1095416a4a31500beaff08f80463 (dev when onboarded); v1.6.2
+#   fails CRD check because dev removed workloadRef since that release. Needs
+#   WG approval on the ticket before merge if CRD baseline is not v1.6.2.
+#
+# Runs on every pull request to dev (default branch), with no path filter.
+name: API contract
+
+on:
+  pull_request:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+jobs:
+  api-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        contract-id:
+          - kuberay-api
+          - kuberay-cluster
+          - kuberay-config
+          - kuberay-job
+          - kuberay-job-submission
+          - kuberay-serve
+    uses: red-hat-data-services/api-contract-tests/.github/workflows/provider-openapi-check.yml@latest
+    with:
+      contract-set: .rhoai/contracts.yaml
+      contract-id: ${{ matrix.contract-id }}
+      baseline-refs: 560baadd3a5c4268e6c021f6cfe36591a7b2551e # v1.6.2
+      oasdiff-version: "1.33.0"
+      yq-version: "4.45.1"
+      mode: enforce
+
+  crd-contract:
+    uses: red-hat-data-services/api-contract-tests/.github/workflows/provider-crd-check.yml@latest
+    with:
+      crd-glob: ray-operator/config/crd/bases/*.yaml
+      baseline-refs: b02c607ea69f1095416a4a31500beaff08f80463 # dev; CRD drift since v1.6.2
+      mode: enforce
+
+  api-contract-coverage:
+    uses: red-hat-data-services/api-contract-tests/.github/workflows/provider-coverage-check.yml@latest
+    with:
+      contract-set: .rhoai/contracts.yaml
+      baseline-refs: 560baadd3a5c4268e6c021f6cfe36591a7b2551e # v1.6.2
+      yq-version: "4.45.1"
+      crd-globs: ray-operator/config/crd/bases/*.yaml
+      crd-exclude-globs: helm-chart/kuberay-operator/crds/*.yaml
+      mode: enforce
