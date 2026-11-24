@@ -1,5 +1,5 @@
 <!-- markdownlint-disable MD013 -->
-# KubeRay
+# KubeRay update
 
 [![Build Status](https://github.com/ray-project/kuberay/workflows/Go-build-and-test/badge.svg)](https://github.com/ray-project/kuberay/actions)
 [![Release](https://img.shields.io/github/v/release/ray-project/kuberay)](https://github.com/ray-project/kuberay/releases)
