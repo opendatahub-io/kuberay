@@ -9,4 +9,4 @@ spec:
       - name: kuberay-operator
         args:
         - --metrics-cert-path=/etc/metrics-certs
-        - --feature-gates=RayClusterStatusConditions=true,RayClusterNetworkPolicy=true,RayClusterMTLS=true,RayClusterPodMonitor=true
+        - --feature-gates=RayClusterStatusConditions=true,RayClusterNetworkPolicy=true,RayClusterMTLS=true,RayClusterPodMonitor=true,RayClusterHistoryServer=true

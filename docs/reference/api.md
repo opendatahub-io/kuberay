@@ -910,6 +910,7 @@ frozen at its December 2023 feature set, and will be unavailable in KubeRay
 
 ### Resource Types
 - [RayCluster](#raycluster)
+- [RayHistoryServer](#rayhistoryserver)
 - [RayJob](#rayjob)
 - [RayService](#rayservice)
 
@@ -961,6 +962,167 @@ _Appears in:_
 | `serviceType` _[ServiceType](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#servicetype-v1-core)_ | ServiceType is Kubernetes service type of the head service. it will be used by the workers to connect to the head pod |  |  |
 
 
+#### HistoryServerAzureBlobStorage
+
+
+
+HistoryServerAzureBlobStorage configures Azure Blob Storage.
+
+
+
+_Appears in:_
+- [HistoryServerStorage](#historyserverstorage)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `container` _string_ | Container is the blob container name. |  |  |
+| `accountUrl` _string_ | AccountURL is the storage account URL (workload identity / default credential flows). |  |  |
+| `authMode` _string_ | AuthMode selects how credentials are obtained (for example connection_string or workload_identity). |  |  |
+
+
+#### HistoryServerDeployment
+
+
+
+HistoryServerDeployment configures the History Server Deployment.
+
+
+
+_Appears in:_
+- [RayHistoryServerSpec](#rayhistoryserverspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `replicas` _integer_ | Replicas is the desired number of History Server pods. | 1 | Maximum: 3 <br />Minimum: 1 <br /> |
+| `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#resourcerequirements-v1-core)_ | Resources sets compute resources for History Server containers. |  |  |
+
+
+#### HistoryServerGCSStorage
+
+
+
+HistoryServerGCSStorage configures Google Cloud Storage.
+
+
+
+_Appears in:_
+- [HistoryServerStorage](#historyserverstorage)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `bucket` _string_ | Bucket is the GCS bucket name. |  |  |
+
+
+#### HistoryServerKubeRBACProxy
+
+
+
+HistoryServerKubeRBACProxy toggles the optional kube-rbac-proxy sidecar.
+
+
+
+_Appears in:_
+- [HistoryServerSecurity](#historyserversecurity)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `enabled` _boolean_ | Enabled controls whether kube-rbac-proxy is deployed with the History Server. |  |  |
+
+
+#### HistoryServerS3Storage
+
+
+
+HistoryServerS3Storage configures an S3-compatible backend.
+
+
+
+_Appears in:_
+- [HistoryServerStorage](#historyserverstorage)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `bucket` _string_ | Bucket is the target bucket name. |  |  |
+| `endpoint` _string_ | Endpoint is the optional custom S3 endpoint URL. |  |  |
+| `region` _string_ | Region is the AWS region (required for AWS and many S3-compatible stores). |  |  |
+
+
+#### HistoryServerSecurity
+
+
+
+HistoryServerSecurity defines security-related History Server settings.
+
+
+
+_Appears in:_
+- [RayHistoryServerSpec](#rayhistoryserverspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `tls` _[HistoryServerTLS](#historyservertls)_ | TLS configures serving certificates for the History Server Service. |  |  |
+| `kubeRBACProxy` _[HistoryServerKubeRBACProxy](#historyserverkuberbacproxy)_ | KubeRBACProxy enables the kube-rbac-proxy sidecar in front of the History Server API. |  |  |
+| `caBundle` _integer array_ | CABundle is an optional PEM bundle used to verify clients or upstream TLS when configuring proxies. |  |  |
+| `liveClusterProxying` _boolean_ | LiveClusterProxying enables proxying of live RayCluster dashboard traffic through the History Server. | false |  |
+
+
+#### HistoryServerStorage
+
+
+
+HistoryServerStorage defines object storage settings for History Server data.
+
+
+
+_Appears in:_
+- [RayHistoryServerSpec](#rayhistoryserverspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `type` _[HistoryServerStorageType](#historyserverstoragetype)_ | Type selects the storage backend implementation. |  | Enum: [s3 gcs azureBlob] <br /> |
+| `rootDir` _string_ | RootDir is the logical prefix inside the backend where session data is stored. |  |  |
+| `credentialsSecret` _[SecretReference](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#secretreference-v1-core)_ | CredentialsSecret references a Secret in the same namespace as the History Server<br />operands that holds backend credentials (for example keys consumed via collector env). |  |  |
+| `s3` _[HistoryServerS3Storage](#historyservers3storage)_ | S3 holds Amazon S3–compatible configuration when type is s3. |  |  |
+| `gcs` _[HistoryServerGCSStorage](#historyservergcsstorage)_ | GCS holds Google Cloud Storage configuration when type is gcs. |  |  |
+| `azureBlob` _[HistoryServerAzureBlobStorage](#historyserverazureblobstorage)_ | AzureBlob holds Azure Blob Storage configuration when type is azureBlob. |  |  |
+
+
+#### HistoryServerStorageType
+
+_Underlying type:_ _string_
+
+HistoryServerStorageType is the object storage backend for History Server and collectors.
+
+_Validation:_
+- Enum: [s3 gcs azureBlob]
+
+_Appears in:_
+- [HistoryServerStorage](#historyserverstorage)
+
+| Field | Description |
+| --- | --- |
+| `s3` |  |
+| `gcs` |  |
+| `azureBlob` |  |
+
+
+#### HistoryServerTLS
+
+
+
+HistoryServerTLS configures cert-manager or static TLS material for the History Server.
+
+
+
+_Appears in:_
+- [HistoryServerSecurity](#historyserversecurity)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `issuerRef` _[TypedLocalObjectReference](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#typedlocalobjectreference-v1-core)_ | IssuerRef references a cert-manager Issuer or ClusterIssuer. |  |  |
+| `secretName` _string_ | SecretName is the TLS certificate Secret mounted by the History Server pods. |  |  |
+
+
 #### RayCluster
 
 
@@ -1006,6 +1168,45 @@ _Appears in:_
 | `headGroupSpec` _[HeadGroupSpec](#headgroupspec)_ | HeadGroupSpec is the spec for the head pod |  |  |
 | `rayVersion` _string_ | RayVersion is used to determine the command for the Kubernetes Job managed by RayJob |  |  |
 | `workerGroupSpecs` _[WorkerGroupSpec](#workergroupspec) array_ | WorkerGroupSpecs are the specs for the worker pods |  |  |
+
+
+#### RayHistoryServer
+
+
+
+RayHistoryServer is the Schema for the cluster-scoped History Server singleton.
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `ray.io/v1alpha1` | | |
+| `kind` _string_ | `RayHistoryServer` | | |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[RayHistoryServerSpec](#rayhistoryserverspec)_ |  |  |  |
+
+
+
+
+#### RayHistoryServerSpec
+
+
+
+RayHistoryServerSpec defines the desired state of RayHistoryServer.
+
+
+
+_Appears in:_
+- [RayHistoryServer](#rayhistoryserver)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `enabled` _boolean_ | Enabled controls whether the History Server control-plane workload is deployed. | false |  |
+| `storage` _[HistoryServerStorage](#historyserverstorage)_ | Storage configures object storage shared by the History Server and RayCluster collectors.<br />Required when enabled is true. |  |  |
+| `security` _[HistoryServerSecurity](#historyserversecurity)_ | Security configures TLS, proxy, and isolation for the History Server API. |  |  |
+| `deployment` _[HistoryServerDeployment](#historyserverdeployment)_ | Deployment configures the History Server Kubernetes workload. |  |  |
 
 
 #### RayJob
