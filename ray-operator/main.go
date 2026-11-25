@@ -35,6 +35,7 @@ import (
 
 	configapi "github.com/ray-project/kuberay/ray-operator/apis/config/v1alpha1"
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
+	rayv1alpha1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1alpha1" //nolint:staticcheck // RayHistoryServer is intentionally introduced in the v1alpha1 API.
 	"github.com/ray-project/kuberay/ray-operator/controllers/ray"
 	"github.com/ray-project/kuberay/ray-operator/controllers/ray/batchscheduler"
 	"github.com/ray-project/kuberay/ray-operator/controllers/ray/metrics"
@@ -56,6 +57,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(rayv1.AddToScheme(scheme))
+	utilruntime.Must(rayv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(configv1.Install(scheme))
 	utilruntime.Must(routev1.Install(scheme))
 	utilruntime.Must(batchv1.AddToScheme(scheme))
@@ -368,6 +370,15 @@ func main() {
 	}
 	exitOnError(ray.NewReconciler(mgr, rayClusterOptions).SetupWithManager(mgr, config.ReconcileConcurrency),
 		"unable to create controller", "controller", "RayCluster")
+
+	// CARRY: RHAI-58416. The downstream overlay enables this capability. CR
+	// presence activates the shared server; readiness never changes the gate.
+	if features.Enabled(features.RayClusterHistoryServer) {
+		historyServerNamespace, _ := utils.GetPlatformNamespace(mgr.GetRESTMapper())
+		exitOnError(ray.NewRayHistoryServerController(mgr, historyServerNamespace,
+			os.Getenv("RELATED_IMAGE_RAY_HISTORY_SERVER"), proxyTLSArgs).SetupWithManager(mgr, config.ReconcileConcurrency),
+			"unable to create controller", "controller", "RayHistoryServer")
+	}
 
 	if features.Enabled(features.RayClusterMTLS) {
 		// ODH/RHOAI carry: the OpenShift overlay enables RayClusterMTLS, but

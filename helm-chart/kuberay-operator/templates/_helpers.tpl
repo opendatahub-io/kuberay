@@ -164,6 +164,7 @@ rules:
   - configmaps
   - persistentvolumeclaims
   - pods/status
+  - secrets
   - serviceaccounts
   - services
   verbs:
@@ -205,17 +206,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - secrets
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
   - services/proxy
   verbs:
   - create
@@ -227,6 +217,8 @@ rules:
   resources:
   - deployments
   verbs:
+  - create
+  - delete
   - get
   - list
   - patch
@@ -262,14 +254,17 @@ rules:
   - certificates
   verbs:
   - create
+  - delete
   - get
   - list
+  - patch
   - update
   - watch
 - apiGroups:
   - cert-manager.io
   resources:
   - certificates/status
+  - clusterissuers
   verbs:
   - get
 - apiGroups:
@@ -278,8 +273,10 @@ rules:
   - issuers
   verbs:
   - create
+  - delete
   - get
   - list
+  - patch
   - watch
 - apiGroups:
   - coordination.k8s.io
@@ -307,7 +304,6 @@ rules:
   - patch
 - apiGroups:
   - extensions
-  - networking.k8s.io
   resources:
   - ingresses
   verbs:
@@ -364,12 +360,14 @@ rules:
 - apiGroups:
   - networking.k8s.io
   resources:
+  - ingresses
   - networkpolicies
   verbs:
   - create
   - delete
   - get
   - list
+  - patch
   - update
   - watch
 - apiGroups:
@@ -401,6 +399,7 @@ rules:
   resources:
   - rayclusters/finalizers
   - raycronjobs/finalizers
+  - rayhistoryservers/finalizers
   - rayjobs/finalizers
   - rayservices/finalizers
   verbs:
@@ -410,6 +409,7 @@ rules:
   resources:
   - rayclusters/status
   - raycronjobs/status
+  - rayhistoryservers/status
   - rayjobs/status
   - rayservices/status
   verbs:
@@ -417,14 +417,42 @@ rules:
   - patch
   - update
 - apiGroups:
+  - ray.io
+  resources:
+  - rayhistoryservers
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - rbac.authorization.k8s.io
   resources:
   - clusterrolebindings
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
   - clusterroles
   verbs:
   - get
   - list
   - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - system:auth-delegator
+  resources:
+  - clusterroles
+  verbs:
+  - bind
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
