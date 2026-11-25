@@ -19,9 +19,9 @@ spec:
   scope: Cluster
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.enabled
-      name: Enabled
-      type: boolean
+    - jsonPath: .spec.storage.type
+      name: Storage
+      type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
@@ -82,9 +82,6 @@ spec:
                         type: object
                     type: object
                 type: object
-              enabled:
-                default: false
-                type: boolean
               security:
                 properties:
                   caBundle:
@@ -157,6 +154,7 @@ spec:
                         type: string
                     required:
                     - bucket
+                    - region
                     type: object
                   type:
                     enum:
@@ -167,19 +165,21 @@ spec:
                 required:
                 - type
                 type: object
+            required:
+            - storage
             type: object
             x-kubernetes-validations:
-            - message: storage is required when enabled is true
-              rule: '!self.enabled || has(self.storage)'
+            - message: storage is required
+              rule: has(self.storage)
             - message: storage.s3 is required when storage.type is s3
-              rule: '!has(self.storage) || !self.enabled || self.storage.type != ''s3''
-                || has(self.storage.s3)'
+              rule: '!has(self.storage) || self.storage.type != ''s3'' || has(self.storage.s3)'
             - message: storage.gcs is required when storage.type is gcs
-              rule: '!has(self.storage) || !self.enabled || self.storage.type != ''gcs''
-                || has(self.storage.gcs)'
+              rule: '!has(self.storage) || self.storage.type != ''gcs'' || has(self.storage.gcs)'
             - message: storage.azureBlob is required when storage.type is azureBlob
-              rule: '!has(self.storage) || !self.enabled || self.storage.type != ''azureBlob''
-                || has(self.storage.azureBlob)'
+              rule: '!has(self.storage) || self.storage.type != ''azureBlob'' || has(self.storage.azureBlob)'
+            - message: storage.s3.region is required when storage.type is s3
+              rule: '!has(self.storage) || self.storage.type != ''s3'' || !has(self.storage.s3)
+                || size(self.storage.s3.region) > 0'
           status:
             properties:
               conditions:

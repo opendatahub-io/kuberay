@@ -5,7 +5,6 @@ kind: RayHistoryServer
 metadata:
   name: default
 spec:
-  enabled: true
   storage:
     type: s3
     rootDir: ray-history

@@ -31,20 +31,14 @@ const (
 
 // RayHistoryServerSpec defines the desired state of RayHistoryServer.
 //
-// +kubebuilder:validation:XValidation:rule="!self.enabled || has(self.storage)",message="storage is required when enabled is true"
-// +kubebuilder:validation:XValidation:rule="!has(self.storage) || !self.enabled || self.storage.type != 's3' || has(self.storage.s3)",message="storage.s3 is required when storage.type is s3"
-// +kubebuilder:validation:XValidation:rule="!has(self.storage) || !self.enabled || self.storage.type != 'gcs' || has(self.storage.gcs)",message="storage.gcs is required when storage.type is gcs"
-// +kubebuilder:validation:XValidation:rule="!has(self.storage) || !self.enabled || self.storage.type != 'azureBlob' || has(self.storage.azureBlob)",message="storage.azureBlob is required when storage.type is azureBlob"
+// +kubebuilder:validation:XValidation:rule="has(self.storage)",message="storage is required"
+// +kubebuilder:validation:XValidation:rule="!has(self.storage) || self.storage.type != 's3' || has(self.storage.s3)",message="storage.s3 is required when storage.type is s3"
+// +kubebuilder:validation:XValidation:rule="!has(self.storage) || self.storage.type != 'gcs' || has(self.storage.gcs)",message="storage.gcs is required when storage.type is gcs"
+// +kubebuilder:validation:XValidation:rule="!has(self.storage) || self.storage.type != 'azureBlob' || has(self.storage.azureBlob)",message="storage.azureBlob is required when storage.type is azureBlob"
+// +kubebuilder:validation:XValidation:rule="!has(self.storage) || self.storage.type != 's3' || !has(self.storage.s3) || size(self.storage.s3.region) > 0",message="storage.s3.region is required when storage.type is s3"
 type RayHistoryServerSpec struct {
-	// Enabled controls whether the History Server control-plane workload is deployed.
-	// +kubebuilder:default=false
-	// +optional
-	Enabled *bool `json:"enabled,omitempty"`
-
 	// Storage configures object storage shared by the History Server and RayCluster collectors.
-	// Required when enabled is true.
-	// +optional
-	Storage *HistoryServerStorage `json:"storage,omitempty"`
+	Storage *HistoryServerStorage `json:"storage"`
 
 	// Security configures TLS, proxy, and isolation for the History Server API.
 	// +optional
@@ -90,8 +84,7 @@ type HistoryServerS3Storage struct {
 	// +optional
 	Endpoint string `json:"endpoint,omitempty"`
 	// Region is the AWS region (required for AWS and many S3-compatible stores).
-	// +optional
-	Region string `json:"region,omitempty"`
+	Region string `json:"region"`
 }
 
 // HistoryServerGCSStorage configures Google Cloud Storage.
@@ -184,7 +177,7 @@ type RayHistoryServerStatus struct {
 //+kubebuilder:storageversion
 //+kubebuilder:resource:scope=Cluster,categories=all,shortName=rhs
 //+kubebuilder:validation:XValidation:rule="self.metadata.name == 'default'",message="RayHistoryServer is a singleton; metadata.name must be 'default'"
-//+kubebuilder:printcolumn:name="Enabled",type=boolean,JSONPath=`.spec.enabled`,priority=0
+//+kubebuilder:printcolumn:name="Storage",type=string,JSONPath=`.spec.storage.type`,priority=0
 //+kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`,priority=0
 //+kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`,priority=0
 // +genclient

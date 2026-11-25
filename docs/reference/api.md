@@ -1203,8 +1203,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `enabled` _boolean_ | Enabled controls whether the History Server control-plane workload is deployed. | false |  |
-| `storage` _[HistoryServerStorage](#historyserverstorage)_ | Storage configures object storage shared by the History Server and RayCluster collectors.<br />Required when enabled is true. |  |  |
+| `storage` _[HistoryServerStorage](#historyserverstorage)_ | Storage configures object storage shared by the History Server and RayCluster collectors. |  |  |
 | `security` _[HistoryServerSecurity](#historyserversecurity)_ | Security configures TLS, proxy, and isolation for the History Server API. |  |  |
 | `deployment` _[HistoryServerDeployment](#historyserverdeployment)_ | Deployment configures the History Server Kubernetes workload. |  |  |
 
