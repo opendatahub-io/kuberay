@@ -110,6 +110,76 @@ func TestValidateManagedOpenShiftMetricsPortIsolation(t *testing.T) {
 	}
 }
 
+func TestValidateManagedOpenShiftMetricsPortUpdates(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		metrics   int32
+		dashboard int32
+		mutateOld func(*rayv1.RayCluster)
+		mutate    func(*rayv1.RayCluster)
+		wantError string
+	}{
+		{name: "scale with existing 8443 conflict", metrics: 8443},
+		{name: "scale with existing client conflict", metrics: 10001},
+		{name: "scale with existing dashboard conflict", metrics: 9365, dashboard: 9365},
+		{name: "backfill existing conflict", metrics: 8443, mutateOld: func(c *rayv1.RayCluster) { c.Spec.NetworkPolicy = nil }},
+		{name: "new conflict", metrics: 9090, mutate: func(c *rayv1.RayCluster) {
+			c.Spec.HeadGroupSpec.RayStartParams["metrics-export-port"] = "8443"
+			c.Spec.HeadGroupSpec.Template.Spec.Containers[0].Ports[0].ContainerPort = 8443
+		}, wantError: "metrics port conflicts"},
+		{name: "changed conflict", metrics: 8443, mutate: func(c *rayv1.RayCluster) {
+			c.Spec.HeadGroupSpec.RayStartParams["metrics-export-port"] = "10001"
+			c.Spec.HeadGroupSpec.Template.Spec.Containers[0].Ports[0].ContainerPort = 10001
+		}, wantError: "metrics port conflicts"},
+		{name: "changed dashboard alongside conflict", metrics: 8443, mutate: func(c *rayv1.RayCluster) {
+			c.Spec.HeadGroupSpec.RayStartParams["dashboard-port"] = "9365"
+			c.Spec.HeadGroupSpec.Template.Spec.Containers[0].Ports[1].ContainerPort = 9365
+		}, wantError: "metrics port conflicts"},
+		{name: "fix existing conflict", metrics: 8443, mutate: func(c *rayv1.RayCluster) {
+			c.Spec.HeadGroupSpec.RayStartParams["metrics-export-port"] = "9090"
+			c.Spec.HeadGroupSpec.Template.Spec.Containers[0].Ports[0].ContainerPort = 9090
+		}},
+		{name: "newly managed conflict", metrics: 8443, mutateOld: func(c *rayv1.RayCluster) {
+			c.Annotations[utils.EnableSecureTrustedNetworkAnnotationKey] = "false"
+		}, mutate: func(c *rayv1.RayCluster) { c.Annotations[utils.EnableSecureTrustedNetworkAnnotationKey] = "true" }, wantError: "metrics port conflicts"},
+		{name: "unchanged conflict still checks declared ports", metrics: 8443, mutate: func(c *rayv1.RayCluster) {
+			c.Spec.HeadGroupSpec.RayStartParams["metrics-export-port"] = "9090"
+		}, wantError: "must declare head container port"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dashboard := tc.dashboard
+			if dashboard == 0 {
+				dashboard = utils.DefaultDashboardPort
+			}
+			old := &rayv1.RayCluster{ObjectMeta: metav1.ObjectMeta{
+				Name: "existing-metrics", Annotations: map[string]string{utils.EnableSecureTrustedNetworkAnnotationKey: "true"},
+			}}
+			old.Spec.HeadGroupSpec.RayStartParams = map[string]string{"metrics-export-port": strconv.Itoa(int(tc.metrics)), "dashboard-port": strconv.Itoa(int(dashboard))}
+			old.Spec.HeadGroupSpec.Template.Spec.Containers = []corev1.Container{{Name: "ray-head", Ports: []corev1.ContainerPort{
+				{Name: utils.MetricsPortName, ContainerPort: tc.metrics}, {Name: utils.DashboardPortName, ContainerPort: dashboard},
+			}}}
+			old.Spec.WorkerGroupSpecs = []rayv1.WorkerGroupSpec{{GroupName: "small", Replicas: new(int32(1))}}
+			utils.EnsureOpenShiftRayClusterSecurity(old)
+			if tc.mutateOld != nil {
+				tc.mutateOld(old)
+			}
+			updated := old.DeepCopy()
+			updated.Spec.WorkerGroupSpecs[0].Replicas = new(int32(2))
+			if tc.mutate != nil {
+				tc.mutate(updated)
+			}
+			updated.Spec.NetworkPolicy = nil
+			utils.EnsureOpenShiftRayClusterNetworkPolicy(updated)
+			err := managedOpenShiftWebhook().validateRayClusterUpdate(updated, old)
+			if tc.wantError != "" {
+				require.ErrorContains(t, err, tc.wantError)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestValidateManagedOpenShiftRayClusterNetworkPolicyRejectsEgressIsolation(t *testing.T) {
 	cluster := &rayv1.RayCluster{
 		ObjectMeta: metav1.ObjectMeta{

@@ -1,6 +1,7 @@
 package ray
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -14,12 +15,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientFake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -541,6 +544,13 @@ func TestNetworkPolicyUWMMetricsIngress(t *testing.T) {
 			}
 			_, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
 			require.NoError(t, err)
+			all := &networkingv1.NetworkPolicyList{}
+			require.NoError(t, r.List(t.Context(), all))
+			wantPolicies := 3
+			if tc.wantRule {
+				wantPolicies += 3
+			}
+			require.Len(t, all.Items, wantPolicies)
 			for i, pod := range pods {
 				if !tc.wantRule {
 					assert.Empty(t, uwmMetricsPortsForPod(t, r.Client, pod))
@@ -555,8 +565,10 @@ func TestNetworkPolicyUWMMetricsIngress(t *testing.T) {
 				base := &networkingv1.NetworkPolicy{}
 				require.NoError(t, r.Get(t.Context(), client.ObjectKey{Namespace: cluster.Namespace, Name: baseName}, base))
 				assert.Empty(t, uwmMetricsPorts(base), "base isolation must not grant group-wide metrics access")
+				assert.Equal(t, r.buildBaseIngressRules(cluster), base.Spec.Ingress, "base policies must not include namespace-only, multi-peer, or all-port monitoring grants")
 				policy := &networkingv1.NetworkPolicy{}
-				require.NoError(t, r.Get(t.Context(), client.ObjectKey{Namespace: cluster.Namespace, Name: fmt.Sprintf("%s-metrics-%s-%d", cluster.Name, strings.TrimPrefix(baseName, cluster.Name+"-"), wantPort)}, policy))
+				require.NoError(t, r.Get(t.Context(), client.ObjectKey{Namespace: cluster.Namespace, Name: uwmMetricsPolicyName(cluster, base, fmt.Sprint(wantPort))}, policy))
+				require.Len(t, policy.Spec.Ingress, 1)
 				assert.Equal(t, networkingv1.NetworkPolicyIngressRule{
 					From: []networkingv1.NetworkPolicyPeer{{
 						NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": "openshift-user-workload-monitoring"}},
@@ -731,21 +743,205 @@ func TestNetworkPolicyUWMPortsAreScopedToPods(t *testing.T) {
 	}
 }
 
+func TestNetworkPolicyUWMMetricsFailurePreservesIsolation(t *testing.T) {
+	for _, failure := range []string{"patch", "create"} {
+		t.Run(failure, func(t *testing.T) {
+			setupNetworkPolicyTest(t)
+			features.SetFeatureGateDuringTest(t, features.RayClusterPodMonitor, true)
+			cluster := testRayClusterBasic.DeepCopy()
+			cluster.UID = "metrics-failure"
+			for _, group := range []string{"small", "large"} {
+				cluster.Spec.WorkerGroupSpecs = append(cluster.Spec.WorkerGroupSpecs, rayv1.WorkerGroupSpec{GroupName: group})
+			}
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "head", Namespace: cluster.Namespace, Labels: map[string]string{utils.RayClusterLabelKey: cluster.Name, utils.RayNodeTypeLabelKey: string(rayv1.HeadNode)}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "ray", Ports: []corev1.ContainerPort{{Name: utils.MetricsPortName, ContainerPort: 8080}}}}},
+			}
+			require.NoError(t, controllerutil.SetControllerReference(cluster, pod, testScheme))
+			unvisited := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "unvisited-metrics", Namespace: cluster.Namespace, Labels: networkPolicyLabels(cluster, "old")}}
+			unvisited.Labels[uwmMetricsPortLabel] = "8080"
+			require.NoError(t, controllerutil.SetControllerReference(cluster, unvisited, testScheme))
+			c := clientFake.NewClientBuilder().WithScheme(testScheme).WithObjects(cluster, pod, unvisited).WithInterceptorFuncs(interceptor.Funcs{
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					if failure == "patch" {
+						return fmt.Errorf("metrics denied")
+					}
+					return c.Patch(ctx, obj, patch, opts...)
+				},
+				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					if failure == "create" && obj.GetLabels()[uwmMetricsPortLabel] != "" {
+						return fmt.Errorf("metrics denied")
+					}
+					return c.Create(ctx, obj, opts...)
+				},
+			}).Build()
+			r := &NetworkPolicyController{Client: c, Scheme: testScheme, Recorder: &events.FakeRecorder{}, isOpenShift: true}
+			_, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
+			require.ErrorContains(t, err, "metrics denied")
+			for _, name := range []string{headNetworkPolicyName(cluster.Name), workerGroupNetworkPolicyName(cluster.Name, "small"), workerGroupNetworkPolicyName(cluster.Name, "large"), unvisited.Name} {
+				require.NoError(t, c.Get(t.Context(), client.ObjectKey{Namespace: cluster.Namespace, Name: name}, &networkingv1.NetworkPolicy{}), "metrics failures must not remove or prevent base isolation")
+			}
+		})
+	}
+}
+
+func TestNetworkPolicyUWMCrossClusterNames(t *testing.T) {
+	for _, order := range [][]string{{"a", "a-metrics"}, {"a-metrics", "a"}} {
+		t.Run(strings.Join(order, "/"), func(t *testing.T) {
+			setupNetworkPolicyTest(t)
+			features.SetFeatureGateDuringTest(t, features.RayClusterPodMonitor, true)
+			clusters := map[string]*rayv1.RayCluster{}
+			pods := map[string]*corev1.Pod{}
+			objects := []client.Object{}
+			for _, name := range []string{"a", "a-metrics"} {
+				cluster := testRayClusterBasic.DeepCopy()
+				cluster.Name, cluster.UID = name, types.UID(name+"-uid")
+				group := "small"
+				if name == "a-metrics" {
+					group = "small-8080"
+				}
+				cluster.Spec.WorkerGroupSpecs = []rayv1.WorkerGroupSpec{{GroupName: group}}
+				pod := &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: cluster.Namespace, Labels: map[string]string{utils.RayClusterLabelKey: name, utils.RayNodeTypeLabelKey: string(rayv1.WorkerNode), utils.RayNodeGroupLabelKey: group}},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "ray", Ports: []corev1.ContainerPort{{Name: utils.MetricsPortName, ContainerPort: 8080}}}}},
+				}
+				require.NoError(t, controllerutil.SetControllerReference(cluster, pod, testScheme))
+				clusters[name], pods[name] = cluster, pod
+				objects = append(objects, cluster, pod)
+			}
+			r := &NetworkPolicyController{Scheme: testScheme, Recorder: &events.FakeRecorder{}, isOpenShift: true, Client: clientFake.NewClientBuilder().WithScheme(testScheme).WithObjects(objects...).Build()}
+			for _, name := range order {
+				_, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(clusters[name])})
+				require.NoError(t, err)
+			}
+			for name, pod := range pods {
+				assert.Equal(t, []int32{8080}, uwmMetricsPortsForPod(t, r.Client, pod))
+				base := &networkingv1.NetworkPolicy{}
+				require.NoError(t, r.Get(t.Context(), client.ObjectKey{Namespace: pod.Namespace, Name: workerGroupNetworkPolicyName(name, pod.Labels[utils.RayNodeGroupLabelKey])}, base))
+				assert.True(t, metav1.IsControlledBy(base, clusters[name]))
+				assert.Empty(t, uwmMetricsPorts(base))
+			}
+		})
+	}
+}
+
+func TestNetworkPolicyUWMRemovesIneligiblePodLabel(t *testing.T) {
+	setupNetworkPolicyTest(t)
+	features.SetFeatureGateDuringTest(t, features.RayClusterPodMonitor, true)
+	cluster := testRayClusterBasic.DeepCopy()
+	cluster.UID = "owner-change"
+	cluster.Spec.WorkerGroupSpecs = []rayv1.WorkerGroupSpec{{GroupName: "small"}}
+	objects := []client.Object{cluster}
+	pods := []*corev1.Pod{}
+	for _, name := range []string{"worker-a", "worker-b"} {
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: cluster.Namespace, Labels: map[string]string{utils.RayClusterLabelKey: cluster.Name, utils.RayNodeTypeLabelKey: string(rayv1.WorkerNode), utils.RayNodeGroupLabelKey: "small"}},
+			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "ray", Ports: []corev1.ContainerPort{{Name: utils.MetricsPortName, ContainerPort: 8080}}}}},
+		}
+		require.NoError(t, controllerutil.SetControllerReference(cluster, pod, testScheme))
+		objects = append(objects, pod)
+		pods = append(pods, pod)
+	}
+	r := &NetworkPolicyController{Scheme: testScheme, Recorder: &events.FakeRecorder{}, isOpenShift: true, Client: clientFake.NewClientBuilder().WithScheme(testScheme).WithObjects(objects...).Build()}
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)}
+	_, err := r.Reconcile(t.Context(), request)
+	require.NoError(t, err)
+	legacy := &networkingv1.NetworkPolicyList{}
+	require.NoError(t, r.List(t.Context(), legacy))
+	for _, policy := range legacy.Items {
+		if policy.Labels[uwmMetricsPortLabel] == "" {
+			continue
+		}
+		policy.Name, policy.ResourceVersion, policy.UID = cluster.Name+"-metrics-workers-small-8080", "", ""
+		require.NoError(t, r.Create(t.Context(), &policy))
+	}
+	require.NoError(t, r.Get(t.Context(), client.ObjectKeyFromObject(pods[0]), pods[0]))
+	pods[0].OwnerReferences = nil
+	require.NoError(t, r.Update(t.Context(), pods[0]))
+	_, err = r.Reconcile(t.Context(), request)
+	require.NoError(t, err)
+	require.NoError(t, r.Get(t.Context(), client.ObjectKeyFromObject(pods[0]), pods[0]))
+	assert.NotContains(t, pods[0].Labels, uwmMetricsPortLabel)
+	assert.Empty(t, uwmMetricsPortsForPod(t, r.Client, pods[0]))
+	assert.Equal(t, []int32{8080}, uwmMetricsPortsForPod(t, r.Client, pods[1]))
+	assert.True(t, errors.IsNotFound(r.Get(t.Context(), client.ObjectKey{Namespace: cluster.Namespace, Name: cluster.Name + "-metrics-workers-small-8080"}, &networkingv1.NetworkPolicy{})))
+}
+
+func TestNetworkPolicyUWMLiveHeadDashboardPorts(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+			setupNetworkPolicyTest(t)
+			features.SetFeatureGateDuringTest(t, features.RayClusterPodMonitor, enabled)
+			cluster := testRayClusterBasic.DeepCopy()
+			cluster.UID = "head-transition"
+			cluster.Annotations = map[string]string{utils.EnableSecureTrustedNetworkAnnotationKey: "true"}
+			cluster.Spec.UpgradeStrategy = &rayv1.RayClusterUpgradeStrategy{Type: new(rayv1.RayClusterUpgradeNone)}
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "head-a", Namespace: cluster.Namespace, Labels: map[string]string{utils.RayClusterLabelKey: cluster.Name, utils.RayNodeTypeLabelKey: string(rayv1.HeadNode)}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "ray", Ports: []corev1.ContainerPort{{Name: utils.MetricsPortName, ContainerPort: 8080}, {Name: utils.DashboardPortName, ContainerPort: 8265}}}}},
+			}
+			require.NoError(t, controllerutil.SetControllerReference(cluster, pod, testScheme))
+			r := &NetworkPolicyController{Scheme: testScheme, Recorder: &events.FakeRecorder{}, isOpenShift: true, Client: clientFake.NewClientBuilder().WithScheme(testScheme).WithObjects(cluster, pod).Build()}
+			for _, ports := range [][2]int32{{9090, 8080}, {9191, 8080}, {9292, 9191}} {
+				require.NoError(t, r.Get(t.Context(), client.ObjectKeyFromObject(cluster), cluster))
+				cluster.Spec.HeadGroupSpec.RayStartParams = map[string]string{"metrics-export-port": fmt.Sprint(ports[0]), "dashboard-port": fmt.Sprint(ports[1])}
+				cluster.Spec.HeadGroupSpec.Template.Spec.Containers[0].Ports = []corev1.ContainerPort{{Name: utils.MetricsPortName, ContainerPort: ports[0]}, {Name: utils.DashboardPortName, ContainerPort: ports[1]}}
+				cluster.Spec.NetworkPolicy = nil
+				utils.EnsureOpenShiftRayClusterNetworkPolicy(cluster)
+				require.NoError(t, r.Update(t.Context(), cluster))
+				before := cluster.Spec.DeepCopy()
+				_, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
+				require.NoError(t, err)
+				policy := &networkingv1.NetworkPolicy{}
+				require.NoError(t, r.Get(t.Context(), client.ObjectKey{Namespace: cluster.Namespace, Name: headNetworkPolicyName(cluster.Name)}, policy))
+				assert.True(t, policyContainsPort(policy.Spec.Ingress, 8265))
+				assert.False(t, policyContainsPort(policy.Spec.Ingress, 8080), "desired dashboard must not expose the actual old metrics listener")
+				require.NoError(t, r.Get(t.Context(), client.ObjectKeyFromObject(cluster), cluster))
+				assert.Equal(t, before, &cluster.Spec)
+			}
+			other := pod.DeepCopy()
+			other.Name = "head-b"
+			other.ResourceVersion, other.UID = "", ""
+			other.Spec.Containers[0].Ports = []corev1.ContainerPort{{Name: utils.MetricsPortName, ContainerPort: 8265}, {Name: utils.DashboardPortName, ContainerPort: 8080}}
+			require.NoError(t, r.Create(t.Context(), other))
+			_, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
+			require.NoError(t, err)
+			policy := &networkingv1.NetworkPolicy{}
+			require.NoError(t, r.Get(t.Context(), client.ObjectKey{Namespace: cluster.Namespace, Name: headNetworkPolicyName(cluster.Name)}, policy))
+			assert.False(t, policyContainsPort(policy.Spec.Ingress, 8080))
+			assert.False(t, policyContainsPort(policy.Spec.Ingress, 8265))
+			assert.True(t, policyContainsPort(policy.Spec.Ingress, 10001))
+		})
+	}
+}
+
 func uwmMetricsPortsForPod(t *testing.T, c client.Client, pod *corev1.Pod) []int32 {
 	t.Helper()
+	ports, err := readUWMMetricsPortsForPod(t.Context(), c, pod)
+	require.NoError(t, err)
+	return ports
+}
+
+func readUWMMetricsPortsForPod(ctx context.Context, c client.Client, pod *corev1.Pod) ([]int32, error) {
 	current := &corev1.Pod{}
-	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(pod), current))
+	if err := c.Get(ctx, client.ObjectKeyFromObject(pod), current); err != nil {
+		return nil, err
+	}
 	policies := &networkingv1.NetworkPolicyList{}
-	require.NoError(t, c.List(t.Context(), policies, client.InNamespace(pod.Namespace)))
+	if err := c.List(ctx, policies, client.InNamespace(pod.Namespace)); err != nil {
+		return nil, err
+	}
 	var ports []int32
 	for _, policy := range policies.Items {
 		selector, err := metav1.LabelSelectorAsSelector(&policy.Spec.PodSelector)
-		require.NoError(t, err)
+		if err != nil {
+			return nil, err
+		}
 		if selector.Matches(labels.Set(current.Labels)) {
 			ports = append(ports, uwmMetricsPorts(&policy)...)
 		}
 	}
-	return ports
+	return ports, nil
 }
 
 func uwmMetricsPorts(policy *networkingv1.NetworkPolicy) []int32 {
@@ -899,7 +1095,7 @@ func TestDeleteStaleNetworkPolicies(t *testing.T) {
 			Build(),
 	}
 
-	_, err := controller.deleteStaleNetworkPolicies(t.Context(), instance, map[string]bool{desired.Name: true})
+	_, err := controller.deleteStaleNetworkPolicies(t.Context(), instance, map[string]bool{desired.Name: true}, false)
 	require.NoError(t, err)
 
 	remaining := &networkingv1.NetworkPolicyList{}

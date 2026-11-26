@@ -4,8 +4,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
@@ -15,15 +18,22 @@ func TestOpenShiftDefaultsDoNotAllowMonitoringNamespace(t *testing.T) {
 	for _, namespace := range []string{"", "openshift-user-workload-monitoring", "custom-monitoring"} {
 		t.Run("namespace="+namespace, func(t *testing.T) {
 			t.Setenv("MONITORING_NAMESPACE", namespace)
-			cluster := &rayv1.RayCluster{}
+			cluster := &rayv1.RayCluster{Spec: rayv1.RayClusterSpec{HeadGroupSpec: rayv1.HeadGroupSpec{
+				RayStartParams: map[string]string{"dashboard-port": "8080", "metrics-export-port": "9090"},
+			}}}
 			EnsureOpenShiftRayClusterSecurity(cluster)
 			want := cluster.Spec.NetworkPolicy.DeepCopy()
 			EnsureOpenShiftRayClusterSecurity(cluster)
 			assert.Equal(t, want, cluster.Spec.NetworkPolicy, "defaulting must be idempotent")
 
 			for _, rule := range cluster.Spec.NetworkPolicy.Head.IngressRules {
-				for _, port := range rule.Ports {
-					assert.NotEqual(t, intstr.FromInt32(8080), *port.Port, "metrics access belongs to the gated UWM rule in NetworkPolicyController")
+				for _, peer := range rule.From {
+					if peer.NamespaceSelector == nil {
+						continue
+					}
+					selector, err := metav1.LabelSelectorAsSelector(peer.NamespaceSelector)
+					require.NoError(t, err)
+					assert.False(t, selector.Matches(labels.Set{corev1.LabelMetadataName: namespace}), "defaults must not grant the configured monitoring namespace access on any port")
 				}
 			}
 		})

@@ -129,7 +129,8 @@ func TestNetworkPolicyUWMUpgrade(t *testing.T) {
 
 	for _, target := range []*corev1.Pod{headPod, pod, retainedPod} {
 		require.Eventually(t, func() bool {
-			return slices.Equal(uwmMetricsPortsForPod(t, c, target), []int32{target.Spec.Containers[0].Ports[0].ContainerPort})
+			ports, err := readUWMMetricsPortsForPod(t.Context(), c, target)
+			return err == nil && slices.Equal(ports, []int32{target.Spec.Containers[0].Ports[0].ContainerPort})
 		}, 10*time.Second, 50*time.Millisecond, target.Name)
 	}
 	for _, old := range policies {
