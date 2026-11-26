@@ -111,7 +111,8 @@ type HistoryServerSecurity struct {
 	// +optional
 	TLS *HistoryServerTLS `json:"tls,omitempty"`
 
-	// KubeRBACProxy enables the kube-rbac-proxy sidecar in front of the History Server API.
+	// KubeRBACProxy holds optional kube-rbac-proxy settings. The controller always deploys
+	// the sidecar in front of the History Server API; this block is reserved for future SAR mapping config.
 	// +optional
 	KubeRBACProxy *HistoryServerKubeRBACProxy `json:"kubeRBACProxy,omitempty"`
 
@@ -136,12 +137,8 @@ type HistoryServerTLS struct {
 	SecretName string `json:"secretName,omitempty"`
 }
 
-// HistoryServerKubeRBACProxy toggles the optional kube-rbac-proxy sidecar.
-type HistoryServerKubeRBACProxy struct {
-	// Enabled controls whether kube-rbac-proxy is deployed with the History Server.
-	// +optional
-	Enabled *bool `json:"enabled,omitempty"`
-}
+// HistoryServerKubeRBACProxy holds kube-rbac-proxy configuration. The sidecar is always deployed.
+type HistoryServerKubeRBACProxy struct{}
 
 // HistoryServerDeployment configures the History Server Deployment.
 type HistoryServerDeployment struct {

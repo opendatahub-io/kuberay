@@ -1017,16 +1017,13 @@ _Appears in:_
 
 
 
-HistoryServerKubeRBACProxy toggles the optional kube-rbac-proxy sidecar.
+HistoryServerKubeRBACProxy holds kube-rbac-proxy configuration. The sidecar is always deployed.
 
 
 
 _Appears in:_
 - [HistoryServerSecurity](#historyserversecurity)
 
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `enabled` _boolean_ | Enabled controls whether kube-rbac-proxy is deployed with the History Server. |  |  |
 
 
 #### HistoryServerS3Storage
@@ -1061,7 +1058,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `tls` _[HistoryServerTLS](#historyservertls)_ | TLS configures serving certificates for the History Server Service. |  |  |
-| `kubeRBACProxy` _[HistoryServerKubeRBACProxy](#historyserverkuberbacproxy)_ | KubeRBACProxy enables the kube-rbac-proxy sidecar in front of the History Server API. |  |  |
+| `kubeRBACProxy` _[HistoryServerKubeRBACProxy](#historyserverkuberbacproxy)_ | KubeRBACProxy holds optional kube-rbac-proxy settings. The controller always deploys<br />the sidecar in front of the History Server API; this block is reserved for future SAR mapping config. |  |  |
 | `caBundle` _integer array_ | CABundle is an optional PEM bundle used to verify clients or upstream TLS when configuring proxies. |  |  |
 | `liveClusterProxying` _boolean_ | LiveClusterProxying enables proxying of live RayCluster dashboard traffic through the History Server. | false |  |
 

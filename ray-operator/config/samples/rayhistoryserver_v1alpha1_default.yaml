@@ -17,7 +17,5 @@ spec:
       endpoint: https://s3.amazonaws.com
   security:
     liveClusterProxying: false
-    kubeRBACProxy:
-      enabled: false
   deployment:
     replicas: 1

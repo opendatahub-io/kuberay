@@ -88,9 +88,6 @@ spec:
                     format: byte
                     type: string
                   kubeRBACProxy:
-                    properties:
-                      enabled:
-                        type: boolean
                     type: object
                   liveClusterProxying:
                     default: false
