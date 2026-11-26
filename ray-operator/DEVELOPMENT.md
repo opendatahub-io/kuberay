@@ -3,6 +3,13 @@
 
 This section walks through how to build and test the operator in a running Kubernetes cluster.
 
+On OpenShift, `RayClusterPodMonitor` enables automatic UWM monitoring and its scoped
+metrics NetworkPolicies. Disabling it removes the owned PodMonitors and metrics
+policies. The `odh.ray.io/cluster-podmonitor: disabled` annotation on a standalone
+RayCluster or its owning RayJob also removes both; the live RayJob value takes precedence.
+`MONITORING_NAMESPACE` no longer grants head metrics access; deployments
+using a separate monitoring setup must supply their own ingress NetworkPolicy.
+
 ## Requirements
 
 | software | version  |                                                                link |

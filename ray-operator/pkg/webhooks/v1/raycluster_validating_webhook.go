@@ -82,7 +82,7 @@ func (w *RayClusterWebhook) validateRayClusterUpdate(rayCluster, oldRayCluster *
 			if err := validateManagedOpenShiftNetworkPolicy(rayCluster, oldRayCluster); err != nil {
 				allErrs = append(allErrs, err)
 			}
-			if err := validateManagedOpenShiftRayPorts(rayCluster); err != nil {
+			if err := validateManagedOpenShiftRayPorts(rayCluster, oldRayCluster); err != nil {
 				allErrs = append(allErrs, err)
 			}
 		}
@@ -110,11 +110,23 @@ func (w *RayClusterWebhook) validateRayClusterUpdate(rayCluster, oldRayCluster *
 // are built from declared container ports, while Routes and NetworkPolicies
 // use the effective RayStartParam; accepting a mismatch creates a broken or
 // unexpectedly exposed managed endpoint.
-func validateManagedOpenShiftRayPorts(rayCluster *rayv1.RayCluster) *field.Error {
+func validateManagedOpenShiftRayPorts(rayCluster, oldRayCluster *rayv1.RayCluster) *field.Error {
 	if !utils.IsLegacySecurityEnabled(rayCluster) {
 		return nil
 	}
 	params := rayCluster.Spec.HeadGroupSpec.RayStartParams
+	metricsPort, dashboardPort := managedOpenShiftHeadPorts(rayCluster)
+	if metricsPort == 8443 || metricsPort == utils.DefaultClientPort || metricsPort == dashboardPort {
+		unchanged := false
+		if oldRayCluster != nil && utils.IsLegacySecurityEnabled(oldRayCluster) {
+			oldMetrics, oldDashboard := managedOpenShiftHeadPorts(oldRayCluster)
+			unchanged = metricsPort == oldMetrics && dashboardPort == oldDashboard
+		}
+		if !unchanged {
+			return field.Invalid(field.NewPath("spec").Child("headGroupSpec"), metricsPort,
+				"managed head metrics port conflicts with a platform dashboard, Ray client, or 8443 compatibility ingress rule")
+		}
+	}
 	if len(params) == 0 {
 		return nil
 	}
@@ -158,6 +170,16 @@ func validateManagedOpenShiftRayPorts(rayCluster *rayv1.RayCluster) *field.Error
 		}
 	}
 	return nil
+}
+
+func managedOpenShiftHeadPorts(rayCluster *rayv1.RayCluster) (metricsPort, dashboardPort int32) {
+	params := rayCluster.Spec.HeadGroupSpec.RayStartParams
+	metricsPort = utils.EffectiveRayStartParamPort(params, "metrics-export-port", utils.DefaultMetricsPort)
+	if len(rayCluster.Spec.HeadGroupSpec.Template.Spec.Containers) > utils.RayContainerIndex {
+		metricsPort = utils.FindContainerPort(&rayCluster.Spec.HeadGroupSpec.Template.Spec.Containers[utils.RayContainerIndex], utils.MetricsPortName, metricsPort)
+	}
+	dashboardPort = utils.EffectiveRayStartParamPort(params, "dashboard-port", utils.DefaultDashboardPort)
+	return metricsPort, dashboardPort
 }
 
 func (w *RayClusterWebhook) isOpenShift() (bool, error) {

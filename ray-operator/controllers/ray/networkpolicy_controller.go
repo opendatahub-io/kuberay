@@ -2,8 +2,11 @@ package ray
 
 import (
 	"context"
+	"crypto/sha256"
+	errstd "errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync" // DO NOT REMOVE FROM ODH FORK OF KUBERAY: this is only used to preserve legacy OpenShift NetworkPolicies during migration
@@ -14,6 +17,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/events"
@@ -22,6 +26,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -47,6 +53,7 @@ const (
 	legacyNetworkPolicyMigrationRequeueInterval = 10 * time.Second
 	legacyNetworkPolicyMigrationMaxRetries      = 6
 	legacyNetworkPolicyMigrationRetryInterval   = time.Minute
+	uwmMetricsPortLabel                         = "odh.ray.io/metrics-port"
 )
 
 // DO NOT REMOVE FROM ODH FORK OF KUBERAY: this is only used to preserve legacy OpenShift NetworkPolicies during migration
@@ -90,8 +97,8 @@ func (r *NetworkPolicyController) resetLegacyMigration(key client.ObjectKey) {
 }
 
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;delete
-// +kubebuilder:rbac:groups=ray.io,resources=rayclusters,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups=ray.io,resources=rayclusters;rayjobs,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch
 
 func (r *NetworkPolicyController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := ctrl.LoggerFrom(ctx)
@@ -137,7 +144,7 @@ func (r *NetworkPolicyController) Reconcile(ctx context.Context, req ctrl.Reques
 		r.resetLegacyMigration(req.NamespacedName) // OPENSHIFT SPECIFIC
 		logger.V(1).Info("NetworkPolicy not configured for RayCluster", "cluster", instance.Name, "namespace", instance.Namespace)
 		// If NetworkPolicies exist but NetworkPolicy config is removed, clean them up
-		_, err := r.deleteStaleNetworkPolicies(ctx, instance, nil)
+		_, err := r.deleteStaleNetworkPolicies(ctx, instance, nil, false)
 		return ctrl.Result{}, err
 	}
 	r.resetLegacyMigration(req.NamespacedName) // OPENSHIFT SPECIFIC
@@ -150,25 +157,54 @@ func (r *NetworkPolicyController) Reconcile(ctx context.Context, req ctrl.Reques
 		mode = *instance.Spec.NetworkPolicy.Mode
 	}
 
-	headNetworkPolicy := r.buildHeadNetworkPolicy(instance, mode)
+	// None upgrades can retain Pods on older metrics ports.
+	pods := &corev1.PodList{}
+	var metricsErr error
+	if r.isOpenShift && (features.Enabled(features.RayClusterPodMonitor) || utils.IsLegacySecurityEnabled(instance)) &&
+		(mode == rayv1.NetworkPolicyDenyAll || mode == rayv1.NetworkPolicyDenyAllIngress) {
+		if err := r.List(ctx, pods, client.InNamespace(instance.Namespace), client.MatchingLabels{utils.RayClusterLabelKey: instance.Name}); err != nil {
+			metricsErr = err
+		}
+	}
+
+	headNetworkPolicy := r.buildHeadNetworkPolicy(instance, mode, pods.Items...)
+	if metricsErr != nil && r.isOpenShift && utils.IsLegacySecurityEnabled(instance) {
+		// Without live ports, defer external head access rather than expose an unknown metrics listener.
+		headNetworkPolicy.Spec.Ingress = r.buildBaseIngressRules(instance)
+	}
 	if err := r.createOrUpdateNetworkPolicy(ctx, instance, headNetworkPolicy); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	desiredNames := map[string]bool{headNetworkPolicy.Name: true}
+	basePolicies := []*networkingv1.NetworkPolicy{headNetworkPolicy}
 	for _, group := range instance.Spec.WorkerGroupSpecs {
 		groupNetworkPolicy := r.buildWorkerGroupNetworkPolicy(instance, mode, group.GroupName)
 		desiredNames[groupNetworkPolicy.Name] = true
 		if err := r.createOrUpdateNetworkPolicy(ctx, instance, groupNetworkPolicy); err != nil {
 			return ctrl.Result{}, err
 		}
+		basePolicies = append(basePolicies, groupNetworkPolicy)
+	}
+	if r.isOpenShift && features.Enabled(features.RayClusterPodMonitor) {
+		for i := range pods.Items {
+			pod := &pods.Items[i]
+			if pod.Labels[uwmMetricsPortLabel] != "" && uwmMetricsPodPort(instance, pod) == -1 {
+				before := pod.DeepCopy()
+				delete(pod.Labels, uwmMetricsPortLabel)
+				metricsErr = errstd.Join(metricsErr, r.Patch(ctx, pod, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})))
+			}
+		}
+		for _, policy := range basePolicies {
+			metricsErr = errstd.Join(metricsErr, r.reconcileUWMMetricsPolicies(ctx, instance, policy, pods.Items, desiredNames))
+		}
 	}
 
 	// Keep stale policies while they are the only isolation for live pods from
 	// removed worker groups. UpgradeStrategy None can leave those pods running.
-	retained, err := r.deleteStaleNetworkPolicies(ctx, instance, desiredNames)
-	if err != nil {
-		return ctrl.Result{}, err
+	retained, err := r.deleteStaleNetworkPolicies(ctx, instance, desiredNames, metricsErr != nil)
+	if err != nil || metricsErr != nil {
+		return ctrl.Result{}, errstd.Join(metricsErr, err)
 	}
 	if retained {
 		return ctrl.Result{RequeueAfter: legacyNetworkPolicyMigrationRetryInterval}, nil
@@ -241,7 +277,24 @@ func workerGroupNetworkPolicyName(clusterName, groupName string) string {
 	return fmt.Sprintf("%s-workers-%s", clusterName, groupName)
 }
 
-func (r *NetworkPolicyController) buildHeadNetworkPolicy(instance *rayv1.RayCluster, mode rayv1.NetworkPolicyMode) *networkingv1.NetworkPolicy {
+func (r *NetworkPolicyController) buildHeadNetworkPolicy(instance *rayv1.RayCluster, mode rayv1.NetworkPolicyMode, pods ...corev1.Pod) *networkingv1.NetworkPolicy {
+	liveMetricsPorts := map[int32]bool{}
+	if r.isOpenShift && utils.IsLegacySecurityEnabled(instance) {
+		for i := range pods {
+			pod := &pods[i]
+			if pod.Labels[utils.RayNodeTypeLabelKey] != string(rayv1.HeadNode) || uwmMetricsPodPort(instance, pod) == -1 {
+				continue
+			}
+			if len(liveMetricsPorts) == 0 {
+				instance = instance.DeepCopy()
+				if instance.Spec.HeadGroupSpec.RayStartParams == nil {
+					instance.Spec.HeadGroupSpec.RayStartParams = map[string]string{}
+				}
+				instance.Spec.HeadGroupSpec.RayStartParams["dashboard-port"] = strconv.Itoa(int(utils.FindContainerPort(&pod.Spec.Containers[utils.RayContainerIndex], utils.DashboardPortName, utils.DefaultDashboardPort)))
+			}
+			liveMetricsPorts[uwmMetricsPodPort(instance, pod)] = true
+		}
+	}
 	var policyTypes []networkingv1.PolicyType
 	var ingressRules []networkingv1.NetworkPolicyIngressRule
 	var egressRules []networkingv1.NetworkPolicyEgressRule
@@ -261,6 +314,22 @@ func (r *NetworkPolicyController) buildHeadNetworkPolicy(instance *rayv1.RayClus
 		// managed rules, so ignoring this field is safe for the managed profile.
 		if instance.Spec.NetworkPolicy.Head != nil && (!r.isOpenShift || !utils.IsLegacySecurityEnabled(instance)) {
 			ingressRules = appendUniqueIngressRules(ingressRules, instance.Spec.NetworkPolicy.Head.IngressRules...)
+		}
+		if len(liveMetricsPorts) > 0 {
+			var safeRules []networkingv1.NetworkPolicyIngressRule
+			for _, rule := range ingressRules {
+				if len(rule.Ports) > 0 {
+					rule.Ports = slices.DeleteFunc(rule.Ports, func(port networkingv1.NetworkPolicyPort) bool {
+						return port.Port != nil && port.Port.Type == intstr.Int && liveMetricsPorts[port.Port.IntVal] &&
+							(port.Protocol == nil || *port.Protocol == corev1.ProtocolTCP)
+					})
+					if len(rule.Ports) == 0 {
+						continue
+					}
+				}
+				safeRules = append(safeRules, rule)
+			}
+			ingressRules = safeRules
 		}
 	}
 
@@ -388,6 +457,103 @@ func (r *NetworkPolicyController) buildWorkerGroupNetworkPolicy(instance *rayv1.
 			Egress:      egressRules,
 		},
 	}
+}
+
+func (r *NetworkPolicyController) buildUWMMetricsIngressRules(containers []corev1.Container) []networkingv1.NetworkPolicyIngressRule {
+	if !r.isOpenShift || !features.Enabled(features.RayClusterPodMonitor) || len(containers) == 0 {
+		return nil
+	}
+	metricsPort := utils.FindContainerPort(&containers[utils.RayContainerIndex], utils.MetricsPortName, -1)
+	if metricsPort < 1 || metricsPort > 65535 {
+		return nil
+	}
+	port := intstr.FromInt32(metricsPort)
+	tcp := corev1.ProtocolTCP
+	return []networkingv1.NetworkPolicyIngressRule{{
+		From: []networkingv1.NetworkPolicyPeer{{
+			NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
+				corev1.LabelMetadataName: utils.UWMNamespace,
+			}},
+			PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
+				utils.KubernetesApplicationNameLabelKey: utils.UWMPrometheusName,
+				"app.kubernetes.io/instance":            utils.UWMPrometheusInstance,
+			}},
+		}},
+		// Named NetworkPolicy ports do not enforce port isolation on the tested OVN CNI.
+		Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &port}},
+	}}
+}
+
+func uwmMetricsPodPort(instance *rayv1.RayCluster, pod *corev1.Pod) int32 {
+	role := pod.Labels[utils.RayNodeTypeLabelKey]
+	if !metav1.IsControlledBy(pod, instance) || (role != string(rayv1.HeadNode) && role != string(rayv1.WorkerNode)) ||
+		pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed || len(pod.Spec.Containers) == 0 {
+		return -1
+	}
+	port := utils.FindContainerPort(&pod.Spec.Containers[utils.RayContainerIndex], utils.MetricsPortName, -1)
+	if port < 1 || port > 65535 {
+		return -1
+	}
+	return port
+}
+
+func uwmMetricsPolicyName(instance *rayv1.RayCluster, policy *networkingv1.NetworkPolicy, port string) string {
+	identity := sha256.Sum256([]byte(string(instance.UID) + "\x00" + policy.Name))
+	return fmt.Sprintf("ray-metrics.%x.%s", identity[:16], port)
+}
+
+func (r *NetworkPolicyController) reconcileUWMMetricsPolicies(ctx context.Context, instance *rayv1.RayCluster, policy *networkingv1.NetworkPolicy, pods []corev1.Pod, desiredNames map[string]bool) error {
+	if !r.isOpenShift || !features.Enabled(features.RayClusterPodMonitor) || !slices.Contains(policy.Spec.PolicyTypes, networkingv1.PolicyTypeIngress) {
+		return nil
+	}
+	if disabled, err := podMonitorDisabled(ctx, r.Client, instance); err != nil || disabled {
+		return err
+	}
+	selector, err := metav1.LabelSelectorAsSelector(&policy.Spec.PodSelector)
+	if err != nil {
+		return err
+	}
+	for i := range pods {
+		pod := &pods[i]
+		if uwmMetricsPodPort(instance, pod) == -1 || !selector.Matches(labels.Set(pod.Labels)) {
+			continue
+		}
+		rules := r.buildUWMMetricsIngressRules(pod.Spec.Containers)
+		if len(rules) == 0 {
+			continue
+		}
+		port := rules[0].Ports[0].Port.String()
+		if pod.Labels[uwmMetricsPortLabel] != port {
+			before := pod.DeepCopy()
+			pod.Labels[uwmMetricsPortLabel] = port
+			if err := r.Patch(ctx, pod, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+				return err
+			}
+		}
+		name := uwmMetricsPolicyName(instance, policy, port)
+		if desiredNames[name] {
+			continue
+		}
+		// A group-wide union of ports would also open unrelated listeners on older Pods.
+		metricsPolicy := &networkingv1.NetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: instance.Namespace, Labels: networkPolicyLabels(instance, policy.Labels[utils.RayNodeGroupLabelKey])},
+			Spec: networkingv1.NetworkPolicySpec{
+				PodSelector: *policy.Spec.PodSelector.DeepCopy(),
+				PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+				Ingress:     rules,
+			},
+		}
+		if metricsPolicy.Spec.PodSelector.MatchLabels == nil {
+			metricsPolicy.Spec.PodSelector.MatchLabels = map[string]string{}
+		}
+		metricsPolicy.Spec.PodSelector.MatchLabels[uwmMetricsPortLabel] = port
+		metricsPolicy.Labels[uwmMetricsPortLabel] = port
+		if err := r.createOrUpdateNetworkPolicy(ctx, instance, metricsPolicy); err != nil {
+			return err
+		}
+		desiredNames[name] = true
+	}
+	return nil
 }
 
 // buildBaseIngressRules returns the intra-cluster ingress rule shared by both
@@ -525,7 +691,7 @@ func normalizeNetworkPolicyPorts(spec *networkingv1.NetworkPolicySpec) {
 
 // deleteStaleNetworkPolicies deletes NetworkPolicies owned by this RayCluster whose
 // names are not in desiredNames.
-func (r *NetworkPolicyController) deleteStaleNetworkPolicies(ctx context.Context, instance *rayv1.RayCluster, desiredNames map[string]bool) (bool, error) {
+func (r *NetworkPolicyController) deleteStaleNetworkPolicies(ctx context.Context, instance *rayv1.RayCluster, desiredNames map[string]bool, metricsIncomplete bool) (bool, error) {
 	logger := ctrl.LoggerFrom(ctx)
 	retained := false
 
@@ -537,6 +703,9 @@ func (r *NetworkPolicyController) deleteStaleNetworkPolicies(ctx context.Context
 
 	for i := range networkPolicies.Items {
 		networkPolicy := &networkPolicies.Items[i]
+		if networkPolicy.Labels[uwmMetricsPortLabel] != "" {
+			continue
+		}
 		if desiredNames[networkPolicy.Name] {
 			continue
 		}
@@ -574,6 +743,11 @@ func (r *NetworkPolicyController) deleteStaleNetworkPolicies(ctx context.Context
 			}
 			if uncovered {
 				retained = true
+				if r.isOpenShift {
+					if err := r.reconcileUWMMetricsPolicies(ctx, instance, networkPolicy, pods.Items, desiredNames); err != nil {
+						return retained, err
+					}
+				}
 				logger.Info("Preserving stale NetworkPolicy while live pods still require it", "name", networkPolicy.Name)
 				continue
 			}
@@ -592,13 +766,47 @@ func (r *NetworkPolicyController) deleteStaleNetworkPolicies(ctx context.Context
 			"Deleted NetworkPolicy %s/%s", instance.Namespace, networkPolicy.Name)
 	}
 
+	// Metrics policies can be deleted even while their worker group is retained.
+	for i := range networkPolicies.Items {
+		policy := &networkPolicies.Items[i]
+		if !metricsIncomplete && policy.Labels[uwmMetricsPortLabel] != "" && !desiredNames[policy.Name] && metav1.IsControlledBy(policy, instance) {
+			if err := client.IgnoreNotFound(r.Delete(ctx, policy)); err != nil {
+				return retained, err
+			}
+		}
+	}
 	return retained, nil
 }
 
 func (r *NetworkPolicyController) SetupWithManager(mgr ctrl.Manager, reconcileConcurrency int) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&rayv1.RayCluster{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Owns(&networkingv1.NetworkPolicy{}).
+	b := ctrl.NewControllerManagedBy(mgr).
+		For(&rayv1.RayCluster{}, builder.WithPredicates(predicate.Or(
+			predicate.GenerationChangedPredicate{},
+			predicate.Funcs{UpdateFunc: func(e event.UpdateEvent) bool {
+				return r.isOpenShift && features.Enabled(features.RayClusterPodMonitor) && e.ObjectOld != nil && e.ObjectNew != nil &&
+					(e.ObjectOld.GetAnnotations()[podMonitorOptOutAnnotation] != e.ObjectNew.GetAnnotations()[podMonitorOptOutAnnotation] ||
+						!reflect.DeepEqual(e.ObjectOld.GetOwnerReferences(), e.ObjectNew.GetOwnerReferences()))
+			}},
+		))).
+		Owns(&networkingv1.NetworkPolicy{})
+	if r.isOpenShift && features.Enabled(features.RayClusterPodMonitor) {
+		if err := mgr.GetFieldIndexer().IndexField(context.Background(), &rayv1.RayCluster{}, podMonitorRayJobIndex, podMonitorRayJobIndexValues); err != nil {
+			return err
+		}
+		b = b.Watches(&rayv1.RayJob{}, handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, job client.Object) []ctrl.Request {
+			return rayJobClusters(ctx, r.Client, job)
+		}), builder.WithPredicates(podMonitorRayJobPredicate()))
+		b = b.Owns(&corev1.Pod{}, builder.WithPredicates(predicate.Funcs{
+			UpdateFunc: func(e event.UpdateEvent) bool {
+				oldPod, oldOK := e.ObjectOld.(*corev1.Pod)
+				newPod, newOK := e.ObjectNew.(*corev1.Pod)
+				return oldOK && newOK && (oldPod.Status.Phase != newPod.Status.Phase ||
+					!reflect.DeepEqual(oldPod.Labels, newPod.Labels) || !reflect.DeepEqual(oldPod.OwnerReferences, newPod.OwnerReferences))
+			},
+			GenericFunc: func(event.GenericEvent) bool { return false },
+		}))
+	}
+	return b.
 		Named("networkpolicy").
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: reconcileConcurrency,
