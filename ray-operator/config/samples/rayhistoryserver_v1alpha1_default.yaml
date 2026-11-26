@@ -1,0 +1,21 @@
+# Cluster-scoped singleton History Server (RHAI-58415). Apply with:
+#   kubectl apply -f config/samples/rayhistoryserver_v1alpha1_default.yaml
+apiVersion: ray.io/v1alpha1
+kind: RayHistoryServer
+metadata:
+  name: default
+spec:
+  storage:
+    type: s3
+    rootDir: ray-history
+    credentialsSecret:
+      name: ray-history-storage
+      namespace: kuberay-system
+    s3:
+      bucket: ray-history
+      region: us-east-1
+      endpoint: https://s3.amazonaws.com
+  security:
+    liveClusterProxying: false
+  deployment:
+    replicas: 1

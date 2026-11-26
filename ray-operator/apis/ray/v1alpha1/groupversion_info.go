@@ -29,6 +29,7 @@ func addKnownTypes(s *runtime.Scheme) error {
 		&RayCluster{}, &RayClusterList{},
 		&RayJob{}, &RayJobList{},
 		&RayService{}, &RayServiceList{},
+		&RayHistoryServer{}, &RayHistoryServerList{},
 	)
 	metav1.AddToGroupVersion(s, GroupVersion)
 	return nil
