@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -96,7 +97,7 @@ func (r *NetworkPolicyController) resetLegacyMigration(key client.ObjectKey) {
 }
 
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;delete
-// +kubebuilder:rbac:groups=ray.io,resources=rayclusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups=ray.io,resources=rayclusters;rayjobs,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch
 
 func (r *NetworkPolicyController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -471,11 +472,11 @@ func (r *NetworkPolicyController) buildUWMMetricsIngressRules(containers []corev
 	return []networkingv1.NetworkPolicyIngressRule{{
 		From: []networkingv1.NetworkPolicyPeer{{
 			NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
-				corev1.LabelMetadataName: "openshift-user-workload-monitoring",
+				corev1.LabelMetadataName: utils.UWMNamespace,
 			}},
 			PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
-				utils.KubernetesApplicationNameLabelKey: "prometheus",
-				"app.kubernetes.io/instance":            "user-workload",
+				utils.KubernetesApplicationNameLabelKey: utils.UWMPrometheusName,
+				"app.kubernetes.io/instance":            utils.UWMPrometheusInstance,
 			}},
 		}},
 		// Named NetworkPolicy ports do not enforce port isolation on the tested OVN CNI.
@@ -504,6 +505,9 @@ func uwmMetricsPolicyName(instance *rayv1.RayCluster, policy *networkingv1.Netwo
 func (r *NetworkPolicyController) reconcileUWMMetricsPolicies(ctx context.Context, instance *rayv1.RayCluster, policy *networkingv1.NetworkPolicy, pods []corev1.Pod, desiredNames map[string]bool) error {
 	if !r.isOpenShift || !features.Enabled(features.RayClusterPodMonitor) || !slices.Contains(policy.Spec.PolicyTypes, networkingv1.PolicyTypeIngress) {
 		return nil
+	}
+	if disabled, err := podMonitorDisabled(ctx, r.Client, instance); err != nil || disabled {
+		return err
 	}
 	selector, err := metav1.LabelSelectorAsSelector(&policy.Spec.PodSelector)
 	if err != nil {
@@ -776,9 +780,22 @@ func (r *NetworkPolicyController) deleteStaleNetworkPolicies(ctx context.Context
 
 func (r *NetworkPolicyController) SetupWithManager(mgr ctrl.Manager, reconcileConcurrency int) error {
 	b := ctrl.NewControllerManagedBy(mgr).
-		For(&rayv1.RayCluster{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		For(&rayv1.RayCluster{}, builder.WithPredicates(predicate.Or(
+			predicate.GenerationChangedPredicate{},
+			predicate.Funcs{UpdateFunc: func(e event.UpdateEvent) bool {
+				return r.isOpenShift && features.Enabled(features.RayClusterPodMonitor) && e.ObjectOld != nil && e.ObjectNew != nil &&
+					(e.ObjectOld.GetAnnotations()[podMonitorOptOutAnnotation] != e.ObjectNew.GetAnnotations()[podMonitorOptOutAnnotation] ||
+						!reflect.DeepEqual(e.ObjectOld.GetOwnerReferences(), e.ObjectNew.GetOwnerReferences()))
+			}},
+		))).
 		Owns(&networkingv1.NetworkPolicy{})
 	if r.isOpenShift && features.Enabled(features.RayClusterPodMonitor) {
+		if err := mgr.GetFieldIndexer().IndexField(context.Background(), &rayv1.RayCluster{}, podMonitorRayJobIndex, podMonitorRayJobIndexValues); err != nil {
+			return err
+		}
+		b = b.Watches(&rayv1.RayJob{}, handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, job client.Object) []ctrl.Request {
+			return rayJobClusters(ctx, r.Client, job)
+		}), builder.WithPredicates(podMonitorRayJobPredicate()))
 		b = b.Owns(&corev1.Pod{}, builder.WithPredicates(predicate.Funcs{
 			UpdateFunc: func(e event.UpdateEvent) bool {
 				oldPod, oldOK := e.ObjectOld.(*corev1.Pod)

@@ -581,6 +581,91 @@ func TestNetworkPolicyUWMMetricsIngress(t *testing.T) {
 	}
 }
 
+func TestNetworkPolicyUWMOptOut(t *testing.T) {
+	for _, ownedByJob := range []bool{false, true} {
+		t.Run(fmt.Sprintf("rayjob=%t", ownedByJob), func(t *testing.T) {
+			setupNetworkPolicyTest(t)
+			features.SetFeatureGateDuringTest(t, features.RayClusterPodMonitor, true)
+			cluster := testRayClusterBasic.DeepCopy()
+			cluster.UID = "opt-out-cluster"
+			cluster.Spec.WorkerGroupSpecs = []rayv1.WorkerGroupSpec{{GroupName: "small", Template: *cluster.Spec.HeadGroupSpec.Template.DeepCopy()}}
+			objects := []client.Object{cluster}
+			var workload client.Object = cluster
+			if ownedByJob {
+				job := &rayv1.RayJob{ObjectMeta: metav1.ObjectMeta{Name: "train", Namespace: cluster.Namespace, UID: "job-uid"}}
+				require.NoError(t, controllerutil.SetControllerReference(job, cluster, testScheme))
+				cluster.Annotations = map[string]string{podMonitorOptOutAnnotation: "disabled"}
+				objects = append(objects, job)
+				workload = job
+			}
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: cluster.Namespace, Labels: map[string]string{
+					utils.RayClusterLabelKey: cluster.Name, utils.RayNodeTypeLabelKey: string(rayv1.WorkerNode), utils.RayNodeGroupLabelKey: "small",
+				}},
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "ray", Ports: []corev1.ContainerPort{{Name: utils.MetricsPortName, ContainerPort: 8080}}}}},
+			}
+			require.NoError(t, controllerutil.SetControllerReference(cluster, pod, testScheme))
+			objects = append(objects, pod)
+			r := &NetworkPolicyController{
+				Scheme: testScheme, Recorder: &events.FakeRecorder{}, isOpenShift: true,
+				Client: clientFake.NewClientBuilder().WithScheme(testScheme).WithObjects(objects...).Build(),
+			}
+			request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)}
+			_, err := r.Reconcile(t.Context(), request)
+			require.NoError(t, err)
+			assert.Equal(t, []int32{8080}, uwmMetricsPortsForPod(t, r.Client, pod))
+			key := client.ObjectKey{Namespace: cluster.Namespace, Name: workerGroupNetworkPolicyName(cluster.Name, "small")}
+			base := &networkingv1.NetworkPolicy{}
+			require.NoError(t, r.Get(t.Context(), key, base))
+			for _, retained := range []bool{false, true} {
+				if retained {
+					require.NoError(t, r.Get(t.Context(), request.NamespacedName, cluster))
+					cluster.Spec.WorkerGroupSpecs = nil
+					require.NoError(t, r.Update(t.Context(), cluster))
+				}
+				for _, disabled := range []bool{true, false} {
+					require.NoError(t, r.Get(t.Context(), client.ObjectKeyFromObject(workload), workload))
+					annotations := workload.GetAnnotations()
+					if annotations == nil {
+						annotations = map[string]string{}
+					}
+					if disabled {
+						annotations[podMonitorOptOutAnnotation] = "disabled"
+					} else {
+						delete(annotations, podMonitorOptOutAnnotation)
+					}
+					workload.SetAnnotations(annotations)
+					require.NoError(t, r.Update(t.Context(), workload))
+					_, err := r.Reconcile(t.Context(), request)
+					require.NoError(t, err)
+					if disabled {
+						assert.Empty(t, uwmMetricsPortsForPod(t, r.Client, pod))
+					} else {
+						assert.Equal(t, []int32{8080}, uwmMetricsPortsForPod(t, r.Client, pod))
+					}
+					got := &networkingv1.NetworkPolicy{}
+					require.NoError(t, r.Get(t.Context(), key, got))
+					assert.Equal(t, base.UID, got.UID)
+					assert.Equal(t, base.Spec, got.Spec, "opt-out must preserve base isolation")
+				}
+			}
+			if ownedByJob {
+				r.Client = interceptor.NewClient(r.Client.(client.WithWatch), interceptor.Funcs{
+					Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+						if _, ok := obj.(*rayv1.RayJob); ok {
+							return fmt.Errorf("RayJob lookup unavailable")
+						}
+						return c.Get(ctx, key, obj, opts...)
+					},
+				})
+				_, err := r.Reconcile(t.Context(), request)
+				require.ErrorContains(t, err, "RayJob lookup unavailable")
+				assert.Equal(t, []int32{8080}, uwmMetricsPortsForPod(t, r.Client, pod), "a failed opt-out lookup must not remove existing metrics access")
+			}
+		})
+	}
+}
+
 func TestNetworkPolicyUWMLivePodPorts(t *testing.T) {
 	setupNetworkPolicyTest(t)
 	features.SetFeatureGateDuringTest(t, features.RayClusterPodMonitor, true)

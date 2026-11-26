@@ -474,7 +474,7 @@ func TestPodMonitorRayJobEventMapping(t *testing.T) {
 	assert.ElementsMatch(t, []ctrl.Request{
 		{NamespacedName: client.ObjectKeyFromObject(cluster)},
 		{NamespacedName: client.ObjectKeyFromObject(second)},
-	}, r.rayJobClusters(t.Context(), job))
+	}, rayJobClusters(t.Context(), r.Client, job))
 }
 
 func TestPodMonitorCleanupFailureCanRecover(t *testing.T) {

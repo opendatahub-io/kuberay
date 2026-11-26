@@ -90,18 +90,10 @@ func (r *PodMonitorController) reconcilePodMonitor(ctx context.Context, cluster 
 	// Finalizers can delay cluster deletion; stop scraping without waiting for GC.
 	disabled := cluster.DeletionTimestamp != nil || r.cleanupOnly
 	if !disabled {
-		disabled = cluster.Annotations[podMonitorOptOutAnnotation] == "disabled"
-		if owner := podMonitorRayJobOwner(cluster); owner != nil {
-			job := &rayv1.RayJob{}
-			err := r.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: owner.Name}, job)
-			if err != nil && !errors.IsNotFound(err) {
-				return err
-			}
-			if err == nil && job.UID == owner.UID {
-				// RayJob annotations are copied at cluster creation. Use the live
-				// parent value so removing an opt-out does not leave a stale copy.
-				disabled = job.Annotations[podMonitorOptOutAnnotation] == "disabled"
-			}
+		var err error
+		disabled, err = podMonitorDisabled(ctx, r.Client, cluster)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -149,6 +141,22 @@ func (r *PodMonitorController) reconcilePodMonitor(ctx context.Context, cluster 
 	}
 	monitor.Labels[podMonitorScrapeLabel] = "false"
 	return r.Update(ctx, monitor)
+}
+
+func podMonitorDisabled(ctx context.Context, reader client.Reader, cluster *rayv1.RayCluster) (bool, error) {
+	disabled := cluster.Annotations[podMonitorOptOutAnnotation] == "disabled"
+	if owner := podMonitorRayJobOwner(cluster); owner != nil {
+		job := &rayv1.RayJob{}
+		err := reader.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: owner.Name}, job)
+		if err != nil && !errors.IsNotFound(err) {
+			return false, err
+		}
+		if err == nil && job.UID == owner.UID {
+			// Use the live parent; a copied cluster annotation may be stale.
+			disabled = job.Annotations[podMonitorOptOutAnnotation] == "disabled"
+		}
+	}
+	return disabled, nil
 }
 
 func desiredPodMonitor(cluster *rayv1.RayCluster) *monitoringv1.PodMonitor {
@@ -255,7 +263,9 @@ func (r *PodMonitorController) setupController(ctx context.Context, mgr ctrl.Man
 		Named("podmonitor").
 		For(&rayv1.RayCluster{}).
 		Owns(&monitoringv1.PodMonitor{}).
-		Watches(&rayv1.RayJob{}, handler.EnqueueRequestsFromMapFunc(r.rayJobClusters), builder.WithPredicates(podMonitorRayJobPredicate())).
+		Watches(&rayv1.RayJob{}, handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, job client.Object) []ctrl.Request {
+			return rayJobClusters(ctx, r.Client, job)
+		}), builder.WithPredicates(podMonitorRayJobPredicate())).
 		WithOptions(controller.Options{MaxConcurrentReconciles: reconcileConcurrency}).
 		Complete(r)
 }
@@ -281,9 +291,9 @@ func podMonitorRayJobIndexValues(obj client.Object) []string {
 	return nil
 }
 
-func (r *PodMonitorController) rayJobClusters(ctx context.Context, job client.Object) []ctrl.Request {
+func rayJobClusters(ctx context.Context, reader client.Reader, job client.Object) []ctrl.Request {
 	clusters := &rayv1.RayClusterList{}
-	if err := r.List(ctx, clusters, client.InNamespace(job.GetNamespace()), client.MatchingFields{podMonitorRayJobIndex: string(job.GetUID())}); err != nil {
+	if err := reader.List(ctx, clusters, client.InNamespace(job.GetNamespace()), client.MatchingFields{podMonitorRayJobIndex: string(job.GetUID())}); err != nil {
 		ctrl.LoggerFrom(ctx).Error(err, "Unable to find RayClusters for RayJob monitoring")
 		return nil
 	}

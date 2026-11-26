@@ -187,6 +187,54 @@ func TestNetworkPolicyUWMUpgrade(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return errors.IsNotFound(c.Get(t.Context(), client.ObjectKeyFromObject(policies[2]), &networkingv1.NetworkPolicy{}))
 	}, 10*time.Second, 50*time.Millisecond)
+	checkHeadPorts := func(want ...int32) {
+		t.Helper()
+		require.Eventually(t, func() bool {
+			ports, err := readUWMMetricsPortsForPod(t.Context(), c, headPod)
+			return err == nil && slices.Equal(ports, want)
+		}, 10*time.Second, 50*time.Millisecond)
+	}
+	for _, disabled := range []bool{true, false} {
+		require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(cluster), cluster))
+		if disabled {
+			cluster.Annotations[podMonitorOptOutAnnotation] = "disabled"
+		} else {
+			delete(cluster.Annotations, podMonitorOptOutAnnotation)
+		}
+		require.NoError(t, c.Update(t.Context(), cluster))
+		if disabled {
+			checkHeadPorts()
+		} else {
+			checkHeadPorts(8080)
+		}
+	}
+	job := &rayv1.RayJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "annotation-watch", Namespace: cluster.Namespace},
+		Spec:       rayv1.RayJobSpec{RayClusterSpec: cluster.Spec.DeepCopy()},
+	}
+	require.NoError(t, c.Create(t.Context(), job))
+	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(cluster), cluster))
+	require.NoError(t, controllerutil.SetControllerReference(job, cluster, scheme))
+	cluster.Annotations[podMonitorOptOutAnnotation] = "disabled"
+	require.NoError(t, c.Update(t.Context(), cluster))
+	checkHeadPorts(8080)
+	for _, disabled := range []bool{true, false} {
+		require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(job), job))
+		job.Annotations = map[string]string{}
+		if disabled {
+			job.Annotations[podMonitorOptOutAnnotation] = "disabled"
+		}
+		require.NoError(t, c.Update(t.Context(), job))
+		if disabled {
+			checkHeadPorts()
+		} else {
+			checkHeadPorts(8080)
+		}
+	}
+	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(cluster), cluster))
+	cluster.OwnerReferences = nil
+	require.NoError(t, c.Update(t.Context(), cluster))
+	checkHeadPorts()
 }
 
 func rayClusterTemplateForNetworkPolicy(name string, namespace string) *rayv1.RayCluster {

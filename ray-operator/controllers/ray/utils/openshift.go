@@ -22,6 +22,12 @@ import (
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 )
 
+const (
+	UWMNamespace          = "openshift-user-workload-monitoring"
+	UWMPrometheusName     = "prometheus"
+	UWMPrometheusInstance = "user-workload"
+)
+
 // openShiftAPIGroups lists the API groups used to detect an OpenShift cluster.
 // We check for specific well-known groups rather than using a broad suffix match
 // (e.g. strings.HasSuffix(".openshift.io")) to avoid false positives from custom
