@@ -115,6 +115,15 @@ func validateManagedOpenShiftRayPorts(rayCluster *rayv1.RayCluster) *field.Error
 		return nil
 	}
 	params := rayCluster.Spec.HeadGroupSpec.RayStartParams
+	metricsPort := utils.EffectiveRayStartParamPort(params, "metrics-export-port", utils.DefaultMetricsPort)
+	if len(rayCluster.Spec.HeadGroupSpec.Template.Spec.Containers) > utils.RayContainerIndex {
+		metricsPort = utils.FindContainerPort(&rayCluster.Spec.HeadGroupSpec.Template.Spec.Containers[utils.RayContainerIndex], utils.MetricsPortName, metricsPort)
+	}
+	dashboardPort := utils.EffectiveRayStartParamPort(params, "dashboard-port", utils.DefaultDashboardPort)
+	if metricsPort == 8443 || metricsPort == utils.DefaultClientPort || metricsPort == dashboardPort {
+		return field.Invalid(field.NewPath("spec").Child("headGroupSpec"), metricsPort,
+			"managed head metrics port conflicts with a platform dashboard, Ray client, or 8443 compatibility ingress rule")
+	}
 	if len(params) == 0 {
 		return nil
 	}

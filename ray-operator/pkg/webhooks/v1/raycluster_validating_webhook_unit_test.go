@@ -2,6 +2,7 @@ package v1
 
 import (
 	"errors"
+	"strconv"
 	"testing"
 
 	routev1 "github.com/openshift/api/route/v1"
@@ -46,6 +47,67 @@ func TestValidateManagedOpenShiftRayClusterNetworkPolicy(t *testing.T) {
 
 	webhook := managedOpenShiftWebhook()
 	require.NoError(t, webhook.validateRayCluster(cluster))
+}
+
+func TestValidateManagedOpenShiftNetworkPolicyLegacyMonitoringRule(t *testing.T) {
+	cluster := &rayv1.RayCluster{ObjectMeta: metav1.ObjectMeta{
+		Name:        "legacy-monitoring",
+		Annotations: map[string]string{utils.EnableSecureTrustedNetworkAnnotationKey: "true"},
+	}}
+	utils.EnsureOpenShiftRayClusterSecurity(cluster)
+	cluster.Spec.NetworkPolicy.Head.IngressRules = append(cluster.Spec.NetworkPolicy.Head.IngressRules, networkingv1.NetworkPolicyIngressRule{
+		From: []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{
+			Key: corev1.LabelMetadataName, Operator: metav1.LabelSelectorOpIn, Values: []string{"openshift-user-workload-monitoring"},
+		}}}}},
+		Ports: []networkingv1.NetworkPolicyPort{{Protocol: new(corev1.ProtocolTCP), Port: new(intstr.FromInt32(8080))}},
+	})
+	webhook := managedOpenShiftWebhook()
+	require.NoError(t, webhook.validateRayClusterUpdate(cluster.DeepCopy(), cluster), "an existing broad rule must not block unrelated updates")
+	require.Error(t, webhook.validateRayCluster(cluster), "new managed clusters must not add broad monitoring access")
+	updated := cluster.DeepCopy()
+	updated.Spec.NetworkPolicy.Head.IngressRules = updated.Spec.NetworkPolicy.Head.IngressRules[:len(updated.Spec.NetworkPolicy.Head.IngressRules)-1]
+	require.NoError(t, webhook.validateRayClusterUpdate(updated, cluster), "the legacy rule may be removed from the spec")
+}
+
+func TestValidateManagedOpenShiftMetricsPortIsolation(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		metrics      int32
+		dashboard    int32
+		declaredOnly bool
+		allowed      bool
+	}{
+		{name: "default", metrics: 8080, allowed: true},
+		{name: "custom", metrics: 9090, allowed: true},
+		{name: "8443 compatibility rule", metrics: 8443},
+		{name: "8443 without RayStartParams", metrics: 8443, declaredOnly: true},
+		{name: "Ray client", metrics: 10001},
+		{name: "dashboard", metrics: 8265},
+		{name: "custom dashboard", metrics: 9365, dashboard: 9365},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := &rayv1.RayCluster{ObjectMeta: metav1.ObjectMeta{
+				Name: "metrics-ports", Annotations: map[string]string{utils.EnableSecureTrustedNetworkAnnotationKey: "true"},
+			}}
+			head := &cluster.Spec.HeadGroupSpec
+			head.RayStartParams = map[string]string{}
+			if !tc.declaredOnly {
+				head.RayStartParams["metrics-export-port"] = strconv.Itoa(int(tc.metrics))
+			}
+			head.Template.Spec.Containers = []corev1.Container{{Name: "ray-head", Ports: []corev1.ContainerPort{{Name: utils.MetricsPortName, ContainerPort: tc.metrics}}}}
+			if tc.dashboard != 0 {
+				head.RayStartParams["dashboard-port"] = strconv.Itoa(int(tc.dashboard))
+				head.Template.Spec.Containers[0].Ports = append(head.Template.Spec.Containers[0].Ports, corev1.ContainerPort{Name: utils.DashboardPortName, ContainerPort: tc.dashboard})
+			}
+			utils.EnsureOpenShiftRayClusterSecurity(cluster)
+			err := managedOpenShiftWebhook().validateRayCluster(cluster)
+			if tc.allowed {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "metrics port conflicts")
+			}
+		})
+	}
 }
 
 func TestValidateManagedOpenShiftRayClusterNetworkPolicyRejectsEgressIsolation(t *testing.T) {

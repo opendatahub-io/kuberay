@@ -17,21 +17,176 @@ package ray
 
 import (
 	"context"
+	"path/filepath"
+	"slices"
+	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	controllerconfig "sigs.k8s.io/controller-runtime/pkg/config"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 	"github.com/ray-project/kuberay/ray-operator/controllers/ray/utils"
+	"github.com/ray-project/kuberay/ray-operator/pkg/features"
 	"github.com/ray-project/kuberay/ray-operator/test/support"
 )
+
+func TestNetworkPolicyUWMUpgrade(t *testing.T) {
+	features.SetFeatureGateDuringTest(t, features.RayClusterPodMonitor, true)
+	env := &envtest.Environment{
+		CRDDirectoryPaths: []string{filepath.Join("..", "..", "config", "crd", "bases")}, ErrorIfCRDPathMissing: true,
+	}
+	config, err := env.Start()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, env.Stop()) })
+	scheme := runtime.NewScheme()
+	require.NoError(t, rayv1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, networkingv1.AddToScheme(scheme))
+	c, err := client.New(config, client.Options{Scheme: scheme})
+	require.NoError(t, err)
+
+	cluster := rayClusterTemplateForNetworkPolicy("uwm-upgrade", "default")
+	cluster.Spec.WorkerGroupSpecs[0].Template.Spec.Containers[0].Ports = []corev1.ContainerPort{{Name: utils.MetricsPortName, ContainerPort: 9090}}
+	legacyRule := networkingv1.NetworkPolicyIngressRule{
+		From: []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{
+			Key: corev1.LabelMetadataName, Operator: metav1.LabelSelectorOpIn, Values: []string{"openshift-user-workload-monitoring"},
+		}}}}},
+		Ports: []networkingv1.NetworkPolicyPort{{Protocol: new(corev1.ProtocolTCP), Port: new(intstr.FromInt32(8080))}},
+	}
+	cluster.Spec.NetworkPolicy.Head.IngressRules = append(cluster.Spec.NetworkPolicy.Head.IngressRules, legacyRule)
+	require.NoError(t, c.Create(t.Context(), cluster))
+	before := cluster.DeepCopy()
+	r := &NetworkPolicyController{Scheme: scheme}
+	policies := []*networkingv1.NetworkPolicy{
+		r.buildHeadNetworkPolicy(cluster, rayv1.NetworkPolicyDenyAllIngress),
+		r.buildWorkerGroupNetworkPolicy(cluster, rayv1.NetworkPolicyDenyAllIngress, "small-group"),
+		r.buildWorkerGroupNetworkPolicy(cluster, rayv1.NetworkPolicyDenyAllIngress, "removed"),
+	}
+	for _, policy := range policies {
+		require.NoError(t, controllerutil.SetControllerReference(cluster, policy, scheme))
+		require.NoError(t, c.Create(t.Context(), policy))
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "existing-worker", Namespace: cluster.Namespace,
+			Labels: map[string]string{utils.RayClusterLabelKey: cluster.Name, utils.RayNodeTypeLabelKey: string(rayv1.WorkerNode), utils.RayNodeGroupLabelKey: "small-group"},
+		},
+		Spec: *cluster.Spec.WorkerGroupSpecs[0].Template.Spec.DeepCopy(),
+	}
+	pod.Spec.Containers[0].Ports[0].ContainerPort = 8080
+	require.NoError(t, controllerutil.SetControllerReference(cluster, pod, scheme))
+	require.NoError(t, c.Create(t.Context(), pod))
+	beforePod := pod.DeepCopy()
+	retainedPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "removed-group-worker", Namespace: cluster.Namespace, Labels: policies[2].Spec.PodSelector.MatchLabels, OwnerReferences: pod.OwnerReferences},
+		Spec:       *pod.Spec.DeepCopy(),
+	}
+	retainedPod.Spec.Containers[0].Ports[0].ContainerPort = 9191
+	require.NoError(t, c.Create(t.Context(), retainedPod))
+	beforeRetainedPod := retainedPod.DeepCopy()
+	headPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "existing-head", Namespace: cluster.Namespace, Labels: policies[0].Spec.PodSelector.MatchLabels, OwnerReferences: pod.OwnerReferences},
+		Spec:       *pod.Spec.DeepCopy(),
+	}
+	require.NoError(t, c.Create(t.Context(), headPod))
+
+	mgr, err := ctrl.NewManager(config, ctrl.Options{
+		Scheme: scheme, Metrics: metricsserver.Options{BindAddress: "0"},
+		Controller: controllerconfig.Controller{SkipNameValidation: new(true)},
+	})
+	require.NoError(t, err)
+	r, err = NewNetworkPolicyController(mgr, true)
+	require.NoError(t, err)
+	require.NoError(t, r.SetupWithManager(mgr, 1))
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- mgr.Start(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(10 * time.Second):
+			t.Error("NetworkPolicy manager failed to stop")
+		}
+	})
+
+	for _, target := range []*corev1.Pod{headPod, pod, retainedPod} {
+		require.Eventually(t, func() bool {
+			return slices.Equal(uwmMetricsPortsForPod(t, c, target), []int32{target.Spec.Containers[0].Ports[0].ContainerPort})
+		}, 10*time.Second, 50*time.Millisecond, target.Name)
+	}
+	for _, old := range policies {
+		got := &networkingv1.NetworkPolicy{}
+		require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(old), got))
+		require.NotContains(t, got.Spec.Ingress, legacyRule)
+		require.Empty(t, uwmMetricsPorts(got), "metrics access must be scoped separately from the group isolation policy")
+		require.Equal(t, old.UID, got.UID, "upgrade must update the existing policy")
+		require.Equal(t, old.Spec.PodSelector, got.Spec.PodSelector)
+	}
+	got := &rayv1.RayCluster{}
+	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(cluster), got))
+	require.Equal(t, before.Spec, got.Spec)
+	require.Equal(t, before.Generation, got.Generation)
+	gotPod := &corev1.Pod{}
+	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(pod), gotPod))
+	require.Equal(t, beforePod.UID, gotPod.UID, "policy reconciliation must not replace Pods")
+	require.Equal(t, beforePod.Spec, gotPod.Spec, "only a Pod metadata label may change")
+	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(retainedPod), gotPod))
+	require.Equal(t, beforeRetainedPod.UID, gotPod.UID)
+	require.Equal(t, beforeRetainedPod.Spec, gotPod.Spec)
+
+	checkWorkerPorts := func(want ...int32) {
+		require.Eventually(t, func() bool {
+			items := &networkingv1.NetworkPolicyList{}
+			if err := c.List(t.Context(), items, client.InNamespace(cluster.Namespace), client.MatchingLabels{utils.RayNodeGroupLabelKey: "small-group"}); err != nil {
+				return false
+			}
+			var ports []int32
+			for _, item := range items.Items {
+				ports = append(ports, uwmMetricsPorts(&item)...)
+			}
+			slices.Sort(ports)
+			return slices.Equal(ports, want)
+		}, 10*time.Second, 50*time.Millisecond)
+	}
+	checkWorkerPorts(8080)
+	anotherPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "another-worker-version", Namespace: cluster.Namespace, Labels: pod.Labels, OwnerReferences: pod.OwnerReferences},
+		Spec:       *pod.Spec.DeepCopy(),
+	}
+	anotherPod.Spec.Containers[0].Ports[0].ContainerPort = 9191
+	require.NoError(t, c.Create(t.Context(), anotherPod))
+	checkWorkerPorts(8080, 9191)
+	require.Equal(t, []int32{8080}, uwmMetricsPortsForPod(t, c, pod))
+	require.Equal(t, []int32{9191}, uwmMetricsPortsForPod(t, c, anotherPod))
+	require.NoError(t, c.Delete(t.Context(), pod, client.GracePeriodSeconds(0)))
+	checkWorkerPorts(9191)
+	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(anotherPod), anotherPod))
+	anotherPod.Status.Phase = corev1.PodFailed
+	require.NoError(t, c.Status().Update(t.Context(), anotherPod))
+	checkWorkerPorts()
+	require.NoError(t, c.Delete(t.Context(), retainedPod, client.GracePeriodSeconds(0)))
+	require.Eventually(t, func() bool {
+		return errors.IsNotFound(c.Get(t.Context(), client.ObjectKeyFromObject(policies[2]), &networkingv1.NetworkPolicy{}))
+	}, 10*time.Second, 50*time.Millisecond)
+}
 
 func rayClusterTemplateForNetworkPolicy(name string, namespace string) *rayv1.RayCluster {
 	cluster := &rayv1.RayCluster{

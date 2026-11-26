@@ -4,8 +4,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -13,7 +11,7 @@ import (
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 )
 
-func TestOpenShiftMonitoringIngress(t *testing.T) {
+func TestOpenShiftDefaultsDoNotAllowMonitoringNamespace(t *testing.T) {
 	for _, namespace := range []string{"", "openshift-user-workload-monitoring", "custom-monitoring"} {
 		t.Run("namespace="+namespace, func(t *testing.T) {
 			t.Setenv("MONITORING_NAMESPACE", namespace)
@@ -23,29 +21,11 @@ func TestOpenShiftMonitoringIngress(t *testing.T) {
 			EnsureOpenShiftRayClusterSecurity(cluster)
 			assert.Equal(t, want, cluster.Spec.NetworkPolicy, "defaulting must be idempotent")
 
-			var monitoringRules []networkingv1.NetworkPolicyIngressRule
 			for _, rule := range cluster.Spec.NetworkPolicy.Head.IngressRules {
 				for _, port := range rule.Ports {
-					if port.Port != nil && *port.Port == intstr.FromInt32(8080) {
-						monitoringRules = append(monitoringRules, rule)
-					}
+					assert.NotEqual(t, intstr.FromInt32(8080), *port.Port, "metrics access belongs to the gated UWM rule in NetworkPolicyController")
 				}
 			}
-			if namespace == "" {
-				assert.Empty(t, monitoringRules, "unset monitoring namespace must not expose metrics")
-				return
-			}
-			require.Len(t, monitoringRules, 1)
-			tcp := corev1.ProtocolTCP
-			metrics := intstr.FromInt32(8080)
-			assert.Equal(t, networkingv1.NetworkPolicyIngressRule{
-				From: []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{
-					MatchExpressions: []metav1.LabelSelectorRequirement{{
-						Key: corev1.LabelMetadataName, Operator: metav1.LabelSelectorOpIn, Values: []string{namespace},
-					}},
-				}}},
-				Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &metrics}},
-			}, monitoringRules[0])
 		})
 	}
 }
@@ -59,14 +39,12 @@ func TestOpenShiftMonitoringPreservesExplicitPolicy(t *testing.T) {
 	assert.Equal(t, want, cluster.Spec.NetworkPolicy, "explicit policies must not acquire platform default rules")
 }
 
-func TestOpenShiftNetworkPolicyUsesEffectiveRayPorts(t *testing.T) {
-	t.Setenv("MONITORING_NAMESPACE", "monitoring")
+func TestOpenShiftNetworkPolicyUsesEffectiveDashboardPort(t *testing.T) {
 	cluster := &rayv1.RayCluster{
 		Spec: rayv1.RayClusterSpec{
 			HeadGroupSpec: rayv1.HeadGroupSpec{
 				RayStartParams: map[string]string{
-					"dashboard-port":      "9365",
-					"metrics-export-port": "9090",
+					"dashboard-port": "9365",
 				},
 			},
 		},
@@ -78,7 +56,6 @@ func TestOpenShiftNetworkPolicyUsesEffectiveRayPorts(t *testing.T) {
 	assert.Contains(t, rulePorts(rules[0]), int32(9365), "dashboard access should use the configured dashboard port")
 	assert.Contains(t, rulePorts(rules[0]), int32(DefaultClientPort), "client access should retain the client port")
 	assert.Contains(t, rulePorts(rules[1]), int32(9365), "RayJob submission should use the configured dashboard port")
-	assert.Contains(t, rulePorts(rules[4]), int32(9090), "monitoring should use the configured metrics port")
 }
 
 func TestOpenShiftNetworkPolicyInvalidRayPortsUseDefaults(t *testing.T) {

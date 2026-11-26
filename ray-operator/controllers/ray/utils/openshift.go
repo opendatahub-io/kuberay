@@ -81,12 +81,8 @@ func EnsureOpenShiftRayClusterMTLS(cluster *rayv1.RayCluster) {
 	}
 }
 
-// EnsureOpenShiftRayClusterNetworkPolicy adds the OpenShift platform policy
-// without overriding an explicit NetworkPolicy value. The managed profile
-// permits valid custom dashboard and metrics RayStartParams; the generated
-// platform rules use those effective ports. The validating webhook separately
-// prevents managed clusters from adding policy rules outside this platform
-// contract.
+// EnsureOpenShiftRayClusterNetworkPolicy adds platform defaults without
+// overriding an explicit NetworkPolicy configuration.
 func EnsureOpenShiftRayClusterNetworkPolicy(cluster *rayv1.RayCluster) {
 	if cluster.Spec.NetworkPolicy == nil {
 		ensureOpenShiftNetworkPolicy(&cluster.Spec)
@@ -98,7 +94,6 @@ func ensureOpenShiftNetworkPolicy(spec *rayv1.RayClusterSpec) {
 	spec.NetworkPolicy = &rayv1.NetworkPolicyConfig{Mode: &mode, Head: &rayv1.NetworkPolicyRules{}}
 	tcp := corev1.ProtocolTCP
 	dashboardPort := EffectiveRayStartParamPort(spec.HeadGroupSpec.RayStartParams, "dashboard-port", DefaultDashboardPort)
-	metricsPort := EffectiveRayStartParamPort(spec.HeadGroupSpec.RayStartParams, "metrics-export-port", DefaultMetricsPort)
 	port := func(value int32) networkingv1.NetworkPolicyPort {
 		p := intstr.FromInt32(value)
 		return networkingv1.NetworkPolicyPort{Protocol: &tcp, Port: &p}
@@ -158,18 +153,6 @@ func ensureOpenShiftNetworkPolicy(spec *rayv1.RayClusterSpec) {
 	spec.NetworkPolicy.Head.IngressRules = appendIngress(spec.NetworkPolicy.Head.IngressRules, networkingv1.NetworkPolicyIngressRule{
 		From: []networkingv1.NetworkPolicyPeer{operatorPeer}, Ports: []networkingv1.NetworkPolicyPort{port(dashboardPort), port(DefaultClientPort)},
 	})
-	// Preserve the 1.6.2 monitoring contract. An unset namespace must not
-	// expose metrics to other namespaces.
-	if monitoringNamespace := os.Getenv("MONITORING_NAMESPACE"); monitoringNamespace != "" {
-		spec.NetworkPolicy.Head.IngressRules = appendIngress(spec.NetworkPolicy.Head.IngressRules, networkingv1.NetworkPolicyIngressRule{
-			From: []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{
-				Key: corev1.LabelMetadataName, Operator: metav1.LabelSelectorOpIn, Values: []string{monitoringNamespace},
-			}}}}},
-			Ports: []networkingv1.NetworkPolicyPort{port(metricsPort)},
-		})
-	}
-	// TODO(ODH NetworkPolicy): Confirm whether the supported monitoring
-	// deployment scrapes worker Pods before adding worker-group metrics rules.
 	gatewayNamespace := GetGatewayNamespace()
 	gatewayName := GetGatewayName()
 	gatewayPeer := networkingv1.NetworkPolicyPeer{
