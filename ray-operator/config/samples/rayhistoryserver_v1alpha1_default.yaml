@@ -10,7 +10,7 @@ spec:
     rootDir: ray-history
     credentialsSecret:
       name: ray-history-storage
-      namespace: kuberay-system
+      namespace: redhat-ods-applications
     s3:
       bucket: ray-history
       region: us-east-1
