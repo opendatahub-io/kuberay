@@ -66,6 +66,10 @@ func TestHistoryServerResourcesSecureExposure(t *testing.T) {
 		case *corev1.ConfigMap:
 			require.Contains(t, obj.Data["config.yaml"], "verb: access")
 			require.Contains(t, obj.Data["config.yaml"], "resource: rayhistoryservers")
+			require.Contains(t, obj.Data["config.yaml"], "apiGroup: ray.io")
+			require.Contains(t, obj.Data["config.yaml"], "resourceName: default")
+			require.NotContains(t, obj.Data["config.yaml"], "group: ray.io")
+			require.NotContains(t, obj.Data["config.yaml"], "name: default")
 			require.NotContains(t, obj.Data["config.yaml"], "namespace:")
 		case *rbacv1.ClusterRoleBinding:
 			require.Equal(t, "system:auth-delegator", obj.RoleRef.Name)

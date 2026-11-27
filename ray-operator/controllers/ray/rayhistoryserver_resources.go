@@ -42,7 +42,7 @@ func historyServerResources(hs *rayv1alpha1.RayHistoryServer, in historyServerIn
 	config := &corev1.ConfigMap{ObjectMeta: metadata(name + "-config"), Data: map[string]string{
 		// Custom access permission avoids treating ordinary CR viewers as archive
 		// administrators. No user bindings or namespace-tenant claims are made.
-		"config.yaml": "authorization:\n  resourceAttributes:\n    group: ray.io\n    resource: rayhistoryservers\n    name: default\n    verb: access\n",
+		"config.yaml": "authorization:\n  resourceAttributes:\n    apiGroup: ray.io\n    resource: rayhistoryservers\n    resourceName: default\n    verb: access\n",
 	}}
 	if hs.Spec.Security != nil && len(hs.Spec.Security.CABundle) > 0 {
 		config.Data["ca.crt"] = string(hs.Spec.Security.CABundle)
