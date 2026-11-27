@@ -34,7 +34,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v3
         with:
-          go-version: '1.26.10'
+          go-version: '1.26.11'
 
       - name: Build operator image
         run: |
@@ -70,7 +70,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v3
         with:
-          go-version: '1.26.10'
+          go-version: '1.26.11'
 
       - name: Set up gotestfmt
         uses: gotesttools/gotestfmt-action@v2

@@ -1,4 +1,4 @@
-FROM golang:1.26.10-bookworm
+FROM golang:1.26.11-bookworm
 
 ENV KUBECONFIG=/kuberay/tests/.kube/config
 ENV GOFLAGS=-mod=mod
